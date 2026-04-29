@@ -459,7 +459,7 @@
 <script>
 const CLIENT_ID = '5eb192f5-f89a-4c88-9bc7-bd5df48a2789';
 const REDIRECT_URI = 'https://sflorezbuitrago-glitch.github.io/caracoldigital.github.io/reservas-digital.html';
-const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxYIjuwroKkXjjwfweia3XRWROkcz6Xei--b872QZOC5bQXRPYYpz7PV6ROXiXUle_U/exec';
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzr2kTe0bp7Q7cCBUWJbYt7pCdgIlhLFbFUhQQBR7b5kZ_xQ7Ki0CzlM6yTWLyMju881A/exec';
 const TENANT = '872ec208-8712-47cc-8052-26a93f2e1f5b';
 
 // ── Login implícito — id_token directo, sin librerías ──
@@ -588,21 +588,21 @@ function enterDemo(){
 // ── GOOGLE SHEETS API via Apps Script ──
 async function callScript(params){
   if(isDemoMode) return null;
-  const url = params.accion === 'leer'
-    ? scriptUrl
-    : scriptUrl;
   if(params.accion === 'leer'){
-    const res = await fetch(scriptUrl);
+    const res = await fetch(scriptUrl + '?t=' + Date.now());
     if(!res.ok) throw new Error('Error '+res.status);
     return res.json();
   } else {
-    const res = await fetch(scriptUrl, {
-      method:'POST',
-      headers:{'Content-Type':'text/plain'},
+    // Google Apps Script requiere no-cors para POST desde dominios externos
+    await fetch(scriptUrl, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: {'Content-Type': 'text/plain'},
       body: JSON.stringify(params)
     });
-    if(!res.ok) throw new Error('Error '+res.status);
-    return res.json();
+    // no-cors no devuelve respuesta legible, esperamos y recargamos
+    await new Promise(r => setTimeout(r, 1500));
+    return { ok: true };
   }
 }
 
