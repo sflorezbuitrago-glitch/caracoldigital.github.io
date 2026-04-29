@@ -496,14 +496,18 @@ function handleCallback(){
   const idToken = params.get('id_token');
   const error   = params.get('error');
 
+  // Limpiar el hash de la URL siempre
+  history.replaceState(null,'',window.location.pathname);
+
   if(error){
-    showToast('Error: '+params.get('error_description'),'error');
-    history.replaceState(null,'',window.location.pathname);
+    const desc = params.get('error_description')||error;
+    showToast('Error Microsoft: '+desc.split('+').join(' ').slice(0,80),'error');
     return null;
   }
-  if(!idToken) return null;
-
-  history.replaceState(null,'',window.location.pathname);
+  if(!idToken){
+    showToast('No se recibió token. Intenta de nuevo.','error');
+    return null;
+  }
 
   const claims = parseJwt(idToken);
   if(!claims) return null;
@@ -890,9 +894,10 @@ document.getElementById('btn-reconfig').onclick=()=>{
 (async()=>{
   const t=new Date();st.year=t.getFullYear();st.month=t.getMonth();
 
-  // ¿Viene de callback OAuth2?
-  if(window.location.hash.includes('code=')){
-    const session = await handleCallback();
+  // ¿Viene de callback OAuth2? (id_token en el hash)
+  const hash = window.location.hash.slice(1);
+  if(hash && (hash.includes('id_token=') || hash.includes('access_token=') || hash.includes('error='))){
+    const session = handleCallback();
     if(session){
       setUserUI(session);
       await cargarReservas();
@@ -901,7 +906,7 @@ document.getElementById('btn-reconfig').onclick=()=>{
     }
   }
 
-  // ¿Hay sesión activa?
+  // ¿Hay sesión activa en sessionStorage?
   const session = getSession();
   if(session){
     setUserUI(session);
