@@ -534,6 +534,11 @@ function setUserUI(session){
   document.getElementById('user-area').innerHTML =
     `<div class="user-pill"><div class="avatar">${session.initials}</div><span>${session.name}</span></div>`;
   loggedEmail = session.email;
+  // Auto-llenar nombre y correo del formulario
+  const nameField = document.getElementById('f-name');
+  const emailField = document.getElementById('f-email');
+  if(nameField && !nameField.value) nameField.value = session.name;
+  if(emailField && !emailField.value){ emailField.value = session.email; validateEmail(); }
 }
 
 
@@ -588,20 +593,60 @@ function enterDemo(){
 // ── GOOGLE SHEETS API via Apps Script ──
 async function callScript(params){
   if(isDemoMode) return null;
+
   if(params.accion === 'leer'){
+    // GET normal funciona sin problemas
     const res = await fetch(scriptUrl + '?t=' + Date.now());
     if(!res.ok) throw new Error('Error '+res.status);
     return res.json();
   } else {
-    // Google Apps Script requiere no-cors para POST desde dominios externos
-    await fetch(scriptUrl, {
-      method: 'POST',
-      mode: 'no-cors',
-      headers: {'Content-Type': 'text/plain'},
-      body: JSON.stringify(params)
+    // Para POST usamos un iframe oculto con un form submit
+    // Esto evita el bloqueo CORS completamente
+    return new Promise((resolve) => {
+      const formId = 'hidden-form-' + Date.now();
+      const iframeId = 'hidden-iframe-' + Date.now();
+
+      // Crear iframe oculto como target
+      const iframe = document.createElement('iframe');
+      iframe.name = iframeId;
+      iframe.id = iframeId;
+      iframe.style.display = 'none';
+      document.body.appendChild(iframe);
+
+      // Crear form oculto
+      const form = document.createElement('form');
+      form.id = formId;
+      form.method = 'POST';
+      form.action = scriptUrl;
+      form.target = iframeId;
+      form.style.display = 'none';
+
+      // Agregar datos como campo oculto
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = 'data';
+      input.value = JSON.stringify(params);
+      form.appendChild(input);
+
+      document.body.appendChild(form);
+
+      // Esperar a que el iframe cargue (respuesta del script)
+      iframe.onload = () => {
+        setTimeout(() => {
+          document.body.removeChild(form);
+          document.body.removeChild(iframe);
+          resolve({ ok: true });
+        }, 500);
+      };
+
+      // Timeout de seguridad
+      setTimeout(() => {
+        try{ document.body.removeChild(form); document.body.removeChild(iframe); }catch(e){}
+        resolve({ ok: true });
+      }, 5000);
+
+      form.submit();
     });
-    await new Promise(r => setTimeout(r, 1500));
-    return { ok: true };
   }
 }
 
