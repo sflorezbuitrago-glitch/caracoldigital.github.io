@@ -600,7 +600,6 @@ async function callScript(params){
       headers: {'Content-Type': 'text/plain'},
       body: JSON.stringify(params)
     });
-    // no-cors no devuelve respuesta legible, esperamos y recargamos
     await new Promise(r => setTimeout(r, 1500));
     return { ok: true };
   }
@@ -617,7 +616,8 @@ async function cargarReservas(){
       if(!st.bookings[k]) st.bookings[k]=[];
       st.bookings[k].push({
         start:r.HoraInicio, end:r.HoraFin,
-        name:r.NombreReservante||'', email:r.EmailReservante||''
+        name:r.NombreReservante||'',
+        email:(r.EmailReservante||'').toLowerCase().trim()
       });
     });
     setSyncing(false,true);
@@ -625,11 +625,23 @@ async function cargarReservas(){
 }
 
 async function crearReserva(espacio,fecha,horaInicio,horaFin,nombreReservante,emailReservante){
+  // Guardar optimistamente en memoria antes del fetch
+  const k = espacio+'|'+fecha;
+  if(!st.bookings[k]) st.bookings[k]=[];
+  st.bookings[k].push({
+    start:horaInicio, end:horaFin,
+    name:nombreReservante,
+    email:emailReservante.toLowerCase().trim()
+  });
+  // Enviar a Google Sheets
   await callScript({accion:'crear',espacio,fecha,horaInicio,horaFin,nombreReservante,emailReservante});
+  // Recargar para sincronizar con datos reales
+  await cargarReservas();
 }
 
 async function cancelarReserva(espacio,fecha,horaInicio,horaFin,emailReservante){
   await callScript({accion:'cancelar',espacio,fecha,horaInicio,horaFin,emailReservante});
+  await cargarReservas();
 }
 
 function setSyncing(syncing,ok){
@@ -817,7 +829,8 @@ function renderBookings(){
   if(!bk.length){el.innerHTML='<div class="empty-state">Sin reservas para este día.</div>';return;}
   const sp=st.space, ds=st.date;
   el.innerHTML=bk.map((b,i)=>{
-    const isOwner = isDemoMode || (loggedEmail && b.email.toLowerCase()===loggedEmail);
+    const isOwner = isDemoMode || !loggedEmail || 
+      (loggedEmail && b.email.toLowerCase().trim() === loggedEmail.toLowerCase().trim());
     const cancelBtn = isOwner
       ? `<button class="b-cancel" onclick="showCancelModal(window._bkCache[${i}],'${sp}','${ds}')">Cancelar</button>`
       : '';
