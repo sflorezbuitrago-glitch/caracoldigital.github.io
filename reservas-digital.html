@@ -481,7 +481,7 @@ function doLogin(){
     client_id:     CLIENT_ID,
     response_type: 'id_token token',
     redirect_uri:  REDIRECT_URI,
-    scope:         'openid profile email',
+    scope:         'openid profile email Calendars.ReadWrite',
     response_mode: 'fragment',
     state,
     nonce,
@@ -498,14 +498,16 @@ function parseJwt(token){
   }catch(e){ return null; }
 }
 
+let graphToken = null;
+
 function handleCallback(){
   const hash = window.location.hash.slice(1);
   if(!hash) return null;
   const params = new URLSearchParams(hash);
-  const idToken = params.get('id_token');
-  const error   = params.get('error');
+  const idToken     = params.get('id_token');
+  const accessToken = params.get('access_token');
+  const error       = params.get('error');
 
-  // Limpiar el hash de la URL siempre
   history.replaceState(null,'',window.location.pathname);
 
   if(error){
@@ -516,6 +518,12 @@ function handleCallback(){
   if(!idToken){
     showToast('No se recibió token. Intenta de nuevo.','error');
     return null;
+  }
+
+  // Guardar access token para Graph API
+  if(accessToken){
+    graphToken = accessToken;
+    sessionStorage.setItem('graph_token', accessToken);
   }
 
   const claims = parseJwt(idToken);
@@ -529,6 +537,13 @@ function handleCallback(){
   };
   sessionStorage.setItem('user_session', JSON.stringify(session));
   return session;
+}
+
+function getGraphToken(){
+  if(graphToken) return graphToken;
+  const t = sessionStorage.getItem('graph_token');
+  if(t){ graphToken = t; return t; }
+  return null;
 }
 
 function getSession(){
@@ -611,18 +626,19 @@ async function cargarReservas(){
       const k = r.espacio+'|'+r.fecha;
       if(!st.bookings[k]) st.bookings[k]=[];
       st.bookings[k].push({
-        start: r.hora_inicio,
-        end:   r.hora_fin,
-        name:  r.nombre_reservante||'',
-        email: (r.email_reservante||'').toLowerCase().trim(),
-        id:    r.id
+        start:    r.hora_inicio,
+        end:      r.hora_fin,
+        name:     r.nombre_reservante||'',
+        email:    (r.email_reservante||'').toLowerCase().trim(),
+        id:       r.id,
+        outlookId:r.outlook_event_id||''
       });
     });
     setSyncing(false,true);
   }catch(e){setSyncing(false,false);showToast('Error cargando reservas: '+e.message,'error');}
 }
 
-async function crearReserva(espacio,fecha,horaInicio,horaFin,nombreReservante,emailReservante,emailsExtra=''){
+async function crearReserva(espacio,fecha,horaInicio,horaFin,nombreReservante,emailReservante,emailsExtra='',outlookEventId=''){
   const res = await fetch(`${SUPABASE_URL}/rest/v1/reservas`, {
     method: 'POST',
     headers: { ...HEADERS, 'Prefer': 'return=representation' },
@@ -632,10 +648,13 @@ async function crearReserva(espacio,fecha,horaInicio,horaFin,nombreReservante,em
       hora_fin: horaFin,
       nombre_reservante: nombreReservante,
       email_reservante: emailReservante,
-      emails_extra: emailsExtra
+      emails_extra: emailsExtra,
+      outlook_event_id: outlookEventId
     })
   });
   if(!res.ok){ const e=await res.json(); throw new Error(e.message||'Error al guardar'); }
+  const data = await res.json();
+  return Array.isArray(data)?data[0]:data;
 }
 
 async function cancelarReserva(id){
@@ -777,21 +796,17 @@ function showCancelModal(b, sp, ds){
     btn.disabled = true; btn.textContent = 'Cancelando…';
     try{
       if(!isDemoMode){
+        // Cancelar evento en Outlook Calendar
+        if(b.outlookId) await cancelarEventoOutlook(b.outlookId);
+        // Eliminar de Supabase
         await cancelarReserva(b.id);
         await cargarReservas();
-        // Descargar .ics de cancelación y abrir correo
-        enviarCorreo({
-          espacio:sp, fecha:ds,
-          hora_inicio:b.start, hora_fin:b.end,
-          nombre_reservante:b.name, email_reservante:b.email,
-          emails_extra:'', id:b.id
-        }, true);
       } else {
         const k = sp+'|'+ds;
         st.bookings[k] = (st.bookings[k]||[]).filter(x=>!(x.start===b.start&&x.email===b.email));
       }
       overlay.remove();
-      showToast('Reserva cancelada. Se descargará el .ics para Outlook.','success');
+      showToast('Reserva cancelada y eliminada de tu calendario de Outlook.','success');
       renderCal(); renderRangeSelector(); renderBookings(); updateSummary();
     }catch(e){
       showToast('Error al cancelar: '+e.message,'error');
@@ -845,45 +860,46 @@ function updateSummary(){
 }
 
 // ── Generar iCal y enviar por correo ──
-function buildICS(r, cancelled){
-  const EN={'sj5':'Sala de juntas 5to piso','sjp':'Sala de juntas Piso P','cw5':'Coworking 5to piso'};
-  const en=EN[r.espacio]||r.espacio;
-  const fd=r.fecha.replace(/-/g,'');
-  const hi=r.hora_inicio.substring(0,5).replace(':','');
-  const hf=r.hora_fin.substring(0,5).replace(':','');
-  const now=new Date().toISOString().replace(/[-:.]/g,'').substring(0,15)+'Z';
-  const uid=(r.id||Math.random().toString(36).slice(2))+'@caracoltv';
-  const status=cancelled?'CANCELLED':'CONFIRMED';
-  return ['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Caracol TV//ES',
-    'METHOD:'+(cancelled?'CANCEL':'REQUEST'),
-    'BEGIN:VEVENT','UID:'+uid,'DTSTAMP:'+now,
-    'DTSTART;TZID=America/Bogota:'+fd+'T'+hi+'00',
-    'DTEND;TZID=America/Bogota:'+fd+'T'+hf+'00',
-    'SUMMARY:'+(cancelled?'CANCELADA - ':'')+'Reserva - '+en,
-    'DESCRIPTION:Reserva para '+r.nombre_reservante+' en '+en,
-    'LOCATION:'+en+' - Caracol Television',
-    'ORGANIZER;CN=Reservas Caracol TV:mailto:sflorezb@caracoltv.com.co',
-    'STATUS:'+status,'SEQUENCE:'+(cancelled?'1':'0'),
-    'END:VEVENT','END:VCALENDAR'].join('\r\n');
+// ── Microsoft Graph API — Eventos de calendario Outlook ──
+const ESPACIOS_N={'sj5':'Sala de juntas 5to piso','sjp':'Sala de juntas Piso P','cw5':'Coworking 5to piso'};
+
+async function crearEventoOutlook(r, emailsExtra=''){
+  const token=getGraphToken();
+  if(!token){showToast('Sesión expirada. Recarga la página para crear el evento en Outlook.','error');return null;}
+  const en=ESPACIOS_N[r.espacio]||r.espacio;
+  const asistentes=[{emailAddress:{address:r.email_reservante,name:r.nombre_reservante},type:'required'}];
+  if(emailsExtra) emailsExtra.split(',').map(e=>e.trim()).filter(Boolean).forEach(e=>asistentes.push({emailAddress:{address:e},type:'required'}));
+  const evento={
+    subject:`Reserva - ${en}`,
+    body:{contentType:'HTML',content:`<p>Reserva confirmada para <strong>${r.nombre_reservante}</strong></p><table style="border-collapse:collapse;font-family:Segoe UI,sans-serif;font-size:13px;"><tr><td style="padding:8px 12px;background:#EEF2FA;font-weight:bold;color:#001F5B;width:120px">Espacio</td><td style="padding:8px 12px;">${en}</td></tr><tr><td style="padding:8px 12px;font-weight:bold;color:#001F5B;">Fecha</td><td style="padding:8px 12px;">${r.fecha}</td></tr><tr><td style="padding:8px 12px;background:#EEF2FA;font-weight:bold;color:#001F5B;">Horario</td><td style="padding:8px 12px;">${r.hora_inicio} – ${r.hora_fin}</td></tr></table>`},
+    start:{dateTime:`${r.fecha}T${r.hora_inicio}:00`,timeZone:'America/Bogota'},
+    end:{dateTime:`${r.fecha}T${r.hora_fin}:00`,timeZone:'America/Bogota'},
+    location:{displayName:`${en} - Caracol Televisión`},
+    attendees:asistentes,
+    isReminderOn:true,
+    reminderMinutesBeforeStart:15
+  };
+  try{
+    const res=await fetch('https://graph.microsoft.com/v1.0/me/events',{
+      method:'POST',
+      headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+      body:JSON.stringify(evento)
+    });
+    if(!res.ok){const e=await res.json().catch(()=>({}));console.error('Graph error:',e);return null;}
+    const data=await res.json();
+    return data.id;
+  }catch(e){console.error('Graph error:',e);return null;}
 }
 
-function descargarICS(r, cancelled){
-  const blob=new Blob([buildICS(r,cancelled)],{type:'text/calendar;charset=utf-8'});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');
-  a.href=url;a.download=(cancelled?'cancelacion':'reserva')+'.ics';
-  document.body.appendChild(a);a.click();
-  setTimeout(()=>{URL.revokeObjectURL(url);document.body.removeChild(a);},1000);
-}
-
-function enviarCorreo(r, cancelled){
-  const EN={'sj5':'Sala de juntas 5to piso','sjp':'Sala de juntas Piso P','cw5':'Coworking 5to piso'};
-  const en=EN[r.espacio]||r.espacio;
-  const asunto=(cancelled?'Reserva cancelada':'Reserva confirmada')+': '+en+' '+r.fecha;
-  const cuerpo=`Hola ${r.nombre_reservante},\n\n${cancelled?'Tu reserva fue cancelada.':'Tu reserva fue confirmada.'}\n\nEspacio: ${en}\nFecha: ${r.fecha}\nHorario: ${r.hora_inicio} - ${r.hora_fin}\n\nAbre el archivo .ics adjunto para ${cancelled?'eliminar':'agregar'} el evento en tu calendario de Outlook.\n\nReservas Caracol TV`;
-  descargarICS(r, cancelled);
-  const dests=[r.email_reservante,...(r.emails_extra?r.emails_extra.split(',').map(e=>e.trim()).filter(Boolean):[])].join(',');
-  setTimeout(()=>window.open(`mailto:${dests}?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(cuerpo)}`,'_blank'),800);
+async function cancelarEventoOutlook(eventId){
+  const token=getGraphToken();
+  if(!token||!eventId) return;
+  try{
+    await fetch(`https://graph.microsoft.com/v1.0/me/events/${eventId}`,{
+      method:'DELETE',
+      headers:{'Authorization':'Bearer '+token}
+    });
+  }catch(e){console.error('Graph delete error:',e);}
 }
 
 async function doReserve(){
@@ -893,15 +909,21 @@ async function doReserve(){
   btn.disabled=true;btnText.innerHTML='<span class="spinner"></span> Guardando…';
   try{
     if(!isDemoMode){
-      await crearReserva(st.space,st.date,st.startH,st.endH,name,email,emailsExtra);
+      // 1. Crear evento en Outlook Calendar
+      const outlookId = await crearEventoOutlook({
+        espacio:st.space, fecha:st.date,
+        hora_inicio:st.startH, hora_fin:st.endH,
+        nombre_reservante:name, email_reservante:email
+      }, emailsExtra);
+      // 2. Guardar en Supabase con el ID del evento de Outlook
+      await crearReserva(st.space,st.date,st.startH,st.endH,name,email,emailsExtra,outlookId||'');
       await cargarReservas();
-      enviarCorreo({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,emails_extra:emailsExtra,id:''},false);
     }else{
       const k=st.space+'|'+st.date;
       if(!st.bookings[k])st.bookings[k]=[];
       st.bookings[k].push({start:st.startH,end:st.endH,name,email,id:Date.now().toString()});
     }
-    showToast('¡Reserva confirmada! Se descargará el .ics para Outlook.','success');
+    showToast('¡Reserva confirmada! El evento fue creado en tu calendario de Outlook.','success');
     const savedDate=st.date;
     st.startH=null;st.endH=null;
     document.getElementById('f-name').value='';
