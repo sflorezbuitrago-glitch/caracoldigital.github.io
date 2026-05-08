@@ -358,7 +358,7 @@
 <div id="setup-screen">
   <div class="setup-card">
     <h2>Configuración inicial</h2>
-    <p class="subtitle">Pega la URL de tu Google Apps Script desplegado. Solo se hace una vez.</p>
+    <p class="subtitle">Conectado a Supabase. Haz clic en continuar.</p>
     <ul class="step-list">
       <li><p>Abre tu Google Sheet → <strong>Extensiones → Apps Script</strong> → pega el código del archivo <code>google-apps-script.js</code> → guarda.</p></li>
       <li><p>Haz clic en <strong>Implementar → Nueva implementación → Aplicación web</strong> → Ejecutar como: <strong>Yo</strong> → Quién tiene acceso: <strong>Cualquier persona</strong> → <strong>Implementar</strong>.</p></li>
@@ -459,7 +459,14 @@
 <script>
 const CLIENT_ID = '5eb192f5-f89a-4c88-9bc7-bd5df48a2789';
 const REDIRECT_URI = 'https://sflorezbuitrago-glitch.github.io/caracoldigital.github.io/reservas-digital.html';
-const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwOh0mINhCRbPdM1Gm56kRBBrY6nYAPyX9Drp2XJrFDT_E6QDEQfOXZ8HYAHXksym5r/exec';
+const SUPABASE_URL = 'https://cjlupcmvjxotsdvqpafr.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_X14k8PSiGuaUceWalLmz6Q_SzJQ8WBg';
+
+const HEADERS = {
+  'Content-Type': 'application/json',
+  'apikey': SUPABASE_KEY,
+  'Authorization': 'Bearer ' + SUPABASE_KEY
+};
 const TENANT = '872ec208-8712-47cc-8052-26a93f2e1f5b';
 
 // ── Login implícito — id_token directo, sin librerías ──
@@ -556,7 +563,6 @@ const DAYS = ['Do','Lu','Ma','Mi','Ju','Vi','Sa'];
 function hToMin(h){const[hh,mm]=h.split(':').map(Number);return hh*60+(mm||0);}
 function durationLabel(s,e){const m=hToMin(e)-hToMin(s);if(m<=0)return'';const h=Math.floor(m/60),mn=m%60;return(h>0?h+'h ':'')+(mn>0?mn+'min':'').trim();}
 
-let scriptUrl = localStorage.getItem('reservas_script_url') || SCRIPT_URL;
 let isDemoMode = false, loggedEmail = null;
 let st = {space:'sj5',year:new Date().getFullYear(),month:new Date().getMonth(),date:null,startH:null,endH:null,bookings:{}};
 
@@ -590,46 +596,24 @@ function enterDemo(){
 
 // doLogin está definido arriba con OAuth2 PKCE nativo
 
-// ── GOOGLE SHEETS API via Apps Script ──
-async function callScript(params){
-  if(isDemoMode) return null;
-
-  const url = new URL(scriptUrl);
-  Object.keys(params).forEach(k => url.searchParams.set(k, params[k]));
-  url.searchParams.set('t', Date.now());
-
-  try{
-    const res = await fetch(url.toString(), {
-      redirect: 'follow',
-      mode: 'cors'
-    });
-    if(!res.ok) throw new Error('Error '+res.status);
-    const text = await res.text();
-    return JSON.parse(text);
-  }catch(e){
-    // Si falla cors, intentar con no-cors solo para escritura
-    if(params.accion !== 'leer'){
-      await fetch(url.toString(), { redirect:'follow', mode:'no-cors' });
-      await new Promise(r=>setTimeout(r,2000));
-      return {ok:true};
-    }
-    throw e;
-  }
-}
-
+// ── SUPABASE API ──
 async function cargarReservas(){
   try{
     setSyncing(true);
-    const data = await callScript({accion:'leer'});
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/reservas?select=*`, { headers: HEADERS });
+    if(!res.ok) throw new Error('Error '+res.status);
+    const data = await res.json();
     st.bookings = {};
-    (data?.reservas||[]).forEach(r=>{
-      if(!r.Espacio||!r.Fecha||!r.HoraInicio||!r.HoraFin) return;
-      const k = r.Espacio+'|'+r.Fecha;
+    data.forEach(r=>{
+      if(!r.espacio||!r.fecha||!r.hora_inicio||!r.hora_fin) return;
+      const k = r.espacio+'|'+r.fecha;
       if(!st.bookings[k]) st.bookings[k]=[];
       st.bookings[k].push({
-        start:r.HoraInicio, end:r.HoraFin,
-        name:r.NombreReservante||'',
-        email:(r.EmailReservante||'').toLowerCase().trim()
+        start: r.hora_inicio,
+        end:   r.hora_fin,
+        name:  r.nombre_reservante||'',
+        email: (r.email_reservante||'').toLowerCase().trim(),
+        id:    r.id
       });
     });
     setSyncing(false,true);
@@ -637,29 +621,33 @@ async function cargarReservas(){
 }
 
 async function crearReserva(espacio,fecha,horaInicio,horaFin,nombreReservante,emailReservante){
-  // Guardar optimistamente en memoria antes del fetch
-  const k = espacio+'|'+fecha;
-  if(!st.bookings[k]) st.bookings[k]=[];
-  st.bookings[k].push({
-    start:horaInicio, end:horaFin,
-    name:nombreReservante,
-    email:emailReservante.toLowerCase().trim()
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/reservas`, {
+    method: 'POST',
+    headers: { ...HEADERS, 'Prefer': 'return=representation' },
+    body: JSON.stringify({
+      espacio, fecha,
+      hora_inicio: horaInicio,
+      hora_fin: horaFin,
+      nombre_reservante: nombreReservante,
+      email_reservante: emailReservante
+    })
   });
-  // Enviar a Google Sheets
-  await callScript({accion:'crear',espacio,fecha,horaInicio,horaFin,nombreReservante,emailReservante});
-  // Recargar para sincronizar con datos reales
-  await cargarReservas();
+  if(!res.ok){ const e=await res.json(); throw new Error(e.message||'Error al guardar'); }
 }
 
-async function cancelarReserva(espacio,fecha,horaInicio,horaFin,emailReservante){
-  await callScript({accion:'cancelar',espacio,fecha,horaInicio,horaFin,emailReservante});
-  await cargarReservas();
+async function cancelarReserva(id){
+  if(!id) throw new Error('ID de reserva no encontrado');
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/reservas?id=eq.${id}`, {
+    method: 'DELETE',
+    headers: HEADERS
+  });
+  if(!res.ok){ const e=await res.json(); throw new Error(e.message||'Error al cancelar'); }
 }
 
 function setSyncing(syncing,ok){
   const dot=document.getElementById('sync-dot'),lbl=document.getElementById('sync-label');
   if(syncing){dot.className='sync-dot syncing';lbl.textContent='Sincronizando…';}
-  else if(ok===true){dot.className='sync-dot';lbl.textContent='Conectado a Google Sheets · '+new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'});}
+  else if(ok===true){dot.className='sync-dot';lbl.textContent='Conectado a Supabase · '+new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'});}
   else if(ok===false){dot.className='sync-dot offline';lbl.textContent='Sin conexión';}
 }
 
@@ -789,7 +777,7 @@ function tClick(h){
 }
 
 async function deleteItem(b){
-  await cancelarReserva(b.espacio, b.fecha, b.start, b.end, b.email);
+  await cancelarReserva(b.id);
 }
 
 function showCancelModal(b, sp, ds){
@@ -817,7 +805,7 @@ function showCancelModal(b, sp, ds){
     btn.disabled = true; btn.textContent = 'Cancelando…';
     try{
       if(!isDemoMode){
-        await cancelarReserva(sp, ds, b.start, b.end, b.email);
+        await cancelarReserva(b.id);
         await cargarReservas();
       } else {
         const k = sp+'|'+ds;
@@ -883,32 +871,23 @@ async function doReserve(){
   btn.disabled=true;btnText.innerHTML='<span class="spinner"></span> Guardando…';
   try{
     if(!isDemoMode){
-      // Guardar optimistamente en memoria primero
-      const k=st.space+'|'+st.date;
-      if(!st.bookings[k]) st.bookings[k]=[];
-      st.bookings[k].push({start:st.startH,end:st.endH,name,email:email.toLowerCase().trim()});
-      // Enviar a Google Sheets
       await crearReserva(st.space,st.date,st.startH,st.endH,name,email);
-      // Intentar recargar desde Sheets (puede fallar por CORS en browser con cuenta corporativa)
-      try{ await cargarReservas(); }catch(e){ console.log('Reload silencioso falló, usando datos locales'); }
+      await cargarReservas();
     }else{
       const k=st.space+'|'+st.date;
       if(!st.bookings[k])st.bookings[k]=[];
-      st.bookings[k].push({start:st.startH,end:st.endH,name,email});
+      st.bookings[k].push({start:st.startH,end:st.endH,name,email,id:Date.now().toString()});
     }
     showToast('¡Reserva confirmada: '+st.startH+' – '+st.endH+'!','success');
-    // Guardar fecha y espacio actual para mantener vista
-    const savedDate=st.date, savedSpace=st.space;
+    const savedDate=st.date;
     st.startH=null;st.endH=null;
     document.getElementById('f-name').value='';document.getElementById('f-email').value='';
     document.getElementById('sel-start').value='';document.getElementById('sel-end').value='';
     document.getElementById('sel-end').disabled=true;
     document.getElementById('dur-badge').className='dur-badge';
     document.getElementById('conflict-alert').style.display='none';
-    // Restaurar fecha seleccionada para ver la reserva recién hecha
     st.date=savedDate;
     renderCal();renderRangeSelector();renderBookings();updateSummary();
-    // Rellenar nombre y correo de nuevo
     setUserUI(getSession());
   }catch(e){showToast('Error al guardar: '+e.message,'error');}
   btnText.textContent='Confirmar reserva';checkForm();
@@ -925,21 +904,13 @@ document.getElementById('next-m').onclick=()=>{if(st.month===11){st.month=0;st.y
 document.getElementById('btn-login').onclick=doLogin;
 document.getElementById('btn-demo').onclick=enterDemo;
 document.getElementById('btn-save-config').onclick=()=>{
-  const url=document.getElementById('setup-site-url').value.trim();
-  if(!url){showToast('Ingresa la URL del Apps Script','error');return;}
-  scriptUrl=url; localStorage.setItem('reservas_script_url',url);
-  cargarReservas().then(()=>{showScreen('app');renderAll();});
+  showScreen('app'); renderAll();
 };
-document.getElementById('btn-reconfig').onclick=()=>{
-  showScreen('setup');
-  document.getElementById('setup-site-url').value=scriptUrl||'';
-};
+document.getElementById('btn-reconfig').onclick=()=>{ showScreen('login'); };
 
 // ── ARRANQUE ──
 (async()=>{
   const t=new Date();st.year=t.getFullYear();st.month=t.getMonth();
-
-  // ¿Viene de callback OAuth2? (id_token en el hash)
   const hash = window.location.hash.slice(1);
   if(hash && (hash.includes('id_token=') || hash.includes('access_token=') || hash.includes('error='))){
     const session = handleCallback();
@@ -950,8 +921,6 @@ document.getElementById('btn-reconfig').onclick=()=>{
       return;
     }
   }
-
-  // ¿Hay sesión activa en sessionStorage?
   const session = getSession();
   if(session){
     setUserUI(session);
@@ -959,8 +928,6 @@ document.getElementById('btn-reconfig').onclick=()=>{
     showScreen('app'); renderAll();
     return;
   }
-
-  // Sin sesión → pantalla de login
   showScreen('login');
 })();
 </script>
