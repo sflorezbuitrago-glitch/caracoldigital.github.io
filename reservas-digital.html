@@ -233,8 +233,8 @@
   .tl-row  { display: flex; gap: 3px; min-width: max-content; }
   .tl-lbls { display: flex; gap: 3px; min-width: max-content; margin-top: 2px; }
   .t-slot { height: 32px; min-width: 38px; border-radius: 5px; display: flex; align-items: center; justify-content: center; font-size: 10px; cursor: pointer; border: 1px solid transparent; transition: all 0.1s; font-family: var(--font-body); }
-  .t-slot.avail    { background: var(--caracol-green-lt); color: var(--caracol-green); border-color: #9fdfc0; }
-  .t-slot.avail:hover { background: #b8edcf; }
+  .t-slot.avail    { background: var(--caracol-navy-lt); color: var(--caracol-navy); border-color: #c8d5ef; }
+  .t-slot.avail:hover { background: #d8e4f5; }
   .t-slot.occup    { background: var(--gray-100); color: var(--gray-400); cursor: not-allowed; }
   .t-slot.in-range { background: var(--caracol-red-lt); color: var(--caracol-red-dk); border-color: #ffb3be; }
   .t-slot.range-start { background: var(--caracol-navy); color: white; border-radius: 5px 2px 2px 5px; border-color: var(--caracol-navy); }
@@ -314,10 +314,17 @@
   <div class="topbar-left">
     <div class="brand-logo">
       <svg class="logo-c" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="50" cy="50" r="50" fill="#1B4F9B"/>
-        <path d="M 57,31 C 62,24 64,20 60,17 C 52,12 38,15 28,20 C 18,25 12,34 12,50 C 12,54 13,57 15,58 C 18,60 22,58 26,54 C 30,50 33,45 37,43 C 40,41 44,40 47,38 C 51,36 55,34 57,31 Z" fill="white"/>
-        <path d="M 43,69 C 38,76 36,80 40,83 C 48,88 62,85 72,80 C 82,75 88,66 88,50 C 88,46 87,43 85,42 C 82,40 78,42 74,46 C 70,50 67,55 63,57 C 60,59 56,60 53,62 C 49,64 45,66 43,69 Z" fill="white"/>
-        <circle cx="49.6" cy="49.7" r="13" fill="white"/>
+        <circle cx="50" cy="50" r="50" fill="#154A8C"/>
+        <!-- Ala superior izquierda -->
+        <path d="M56.3,31.3 C52,28 44,27 36,29 C26,32 14,39 12,50 C12,53 13,56 16,57 C20,59 25,55 30,50 C34,46 37,43 41,41 C44,39 48,38 52,37 C55,35 57,33 56.3,31.3 Z" fill="white"/>
+        <!-- Punta superior derecha del ala -->
+        <path d="M56.3,31.3 C58,30 62,30 65,31 C56,27 48,28 42,31 Z" fill="white"/>
+        <!-- Ala inferior derecha -->
+        <path d="M43.7,68.7 C48,72 56,73 64,71 C74,68 86,61 88,50 C88,47 87,44 84,43 C80,41 75,45 70,50 C66,54 63,57 59,59 C56,61 52,62 48,63 C45,65 43,67 43.7,68.7 Z" fill="white"/>
+        <!-- Punta inferior izquierda del ala -->
+        <path d="M43.7,68.7 C42,70 38,70 35,69 C44,73 52,72 58,69 Z" fill="white"/>
+        <!-- Esfera central -->
+        <circle cx="50" cy="50" r="13.5" fill="white"/>
       </svg>
       <div class="brand-text">
         <span class="brand-name">Caracol TV</span>
@@ -337,10 +344,12 @@
     <div class="login-brand">
       <div class="login-logo-wrap">
         <svg class="login-logo-inner" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="50" cy="50" r="50" fill="#1B4F9B"/>
-          <path d="M 57,31 C 62,24 64,20 60,17 C 52,12 38,15 28,20 C 18,25 12,34 12,50 C 12,54 13,57 15,58 C 18,60 22,58 26,54 C 30,50 33,45 37,43 C 40,41 44,40 47,38 C 51,36 55,34 57,31 Z" fill="white"/>
-          <path d="M 43,69 C 38,76 36,80 40,83 C 48,88 62,85 72,80 C 82,75 88,66 88,50 C 88,46 87,43 85,42 C 82,40 78,42 74,46 C 70,50 67,55 63,57 C 60,59 56,60 53,62 C 49,64 45,66 43,69 Z" fill="white"/>
-          <circle cx="49.6" cy="49.7" r="13" fill="white"/>
+          <circle cx="50" cy="50" r="50" fill="#154A8C"/>
+          <path d="M56.3,31.3 C52,28 44,27 36,29 C26,32 14,39 12,50 C12,53 13,56 16,57 C20,59 25,55 30,50 C34,46 37,43 41,41 C44,39 48,38 52,37 C55,35 57,33 56.3,31.3 Z" fill="white"/>
+          <path d="M56.3,31.3 C58,30 62,30 65,31 C56,27 48,28 42,31 Z" fill="white"/>
+          <path d="M43.7,68.7 C48,72 56,73 64,71 C74,68 86,61 88,50 C88,47 87,44 84,43 C80,41 75,45 70,50 C66,54 63,57 59,59 C56,61 52,62 48,63 C45,65 43,67 43.7,68.7 Z" fill="white"/>
+          <path d="M43.7,68.7 C42,70 38,70 35,69 C44,73 52,72 58,69 Z" fill="white"/>
+          <circle cx="50" cy="50" r="13.5" fill="white"/>
         </svg>
       </div>
     </div>
@@ -439,6 +448,8 @@
           <label>Correo corporativo</label>
           <input type="email" id="f-email" placeholder="nombre@caracoltv.com.co" oninput="validateEmail()" autocomplete="email" />
           <div class="err" id="email-err"></div>
+          <label style="margin-top:10px;display:block;">Correos adicionales <span style="font-weight:400;text-transform:none;font-size:10px;color:var(--gray-400)">(opcional, separados por coma)</span></label>
+          <input type="text" id="f-emails-extra" placeholder="colega1@caracoltv.com.co, colega2@caracoltv.com.co" style="width:100%;padding:10px 12px;border:1px solid var(--gray-200);border-radius:var(--radius-sm);font-size:12px;font-family:var(--font-body);color:var(--gray-900);background:white;margin-bottom:14px;" />
         </div>
         <div class="summary" id="f-summary">Selecciona espacio, fecha, hora de inicio y hora de fin para continuar.</div>
         <button class="btn-confirm" id="btn-confirm" disabled onclick="doReserve()">
@@ -620,7 +631,7 @@ async function cargarReservas(){
   }catch(e){setSyncing(false,false);showToast('Error cargando reservas: '+e.message,'error');}
 }
 
-async function crearReserva(espacio,fecha,horaInicio,horaFin,nombreReservante,emailReservante){
+async function crearReserva(espacio,fecha,horaInicio,horaFin,nombreReservante,emailReservante,emailsExtra=''){
   const res = await fetch(`${SUPABASE_URL}/rest/v1/reservas`, {
     method: 'POST',
     headers: { ...HEADERS, 'Prefer': 'return=representation' },
@@ -629,7 +640,8 @@ async function crearReserva(espacio,fecha,horaInicio,horaFin,nombreReservante,em
       hora_inicio: horaInicio,
       hora_fin: horaFin,
       nombre_reservante: nombreReservante,
-      email_reservante: emailReservante
+      email_reservante: emailReservante,
+      emails_extra: emailsExtra
     })
   });
   if(!res.ok){ const e=await res.json(); throw new Error(e.message||'Error al guardar'); }
@@ -867,11 +879,12 @@ function updateSummary(){
 
 async function doReserve(){
   const name=document.getElementById('f-name').value.trim(),email=document.getElementById('f-email').value.trim();
+  const emailsExtra=document.getElementById('f-emails-extra').value.trim();
   const btn=document.getElementById('btn-confirm'),btnText=document.getElementById('btn-text');
   btn.disabled=true;btnText.innerHTML='<span class="spinner"></span> Guardando…';
   try{
     if(!isDemoMode){
-      await crearReserva(st.space,st.date,st.startH,st.endH,name,email);
+      await crearReserva(st.space,st.date,st.startH,st.endH,name,email,emailsExtra);
       await cargarReservas();
     }else{
       const k=st.space+'|'+st.date;
@@ -881,7 +894,9 @@ async function doReserve(){
     showToast('¡Reserva confirmada: '+st.startH+' – '+st.endH+'!','success');
     const savedDate=st.date;
     st.startH=null;st.endH=null;
-    document.getElementById('f-name').value='';document.getElementById('f-email').value='';
+    document.getElementById('f-name').value='';
+    document.getElementById('f-email').value='';
+    document.getElementById('f-emails-extra').value='';
     document.getElementById('sel-start').value='';document.getElementById('sel-end').value='';
     document.getElementById('sel-end').disabled=true;
     document.getElementById('dur-badge').className='dur-badge';
