@@ -223,24 +223,21 @@
   .range-group select:disabled { background: var(--gray-100); color: var(--gray-400); cursor: not-allowed; }
 
   .conflict-alert { background: #fffbeb; border: 1px solid var(--caracol-yellow); border-radius: var(--radius-sm); padding: 8px 12px; font-size: 12px; color: #7c5a00; margin-bottom: 10px; display: none; }
-
   .dur-badge { display: none; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 999px; font-size: 12px; font-weight: 600; margin-bottom: 12px; font-family: var(--font-head); }
-  .dur-badge.valid   { display: inline-flex; background: var(--caracol-green-lt); color: var(--caracol-green); }
+  .dur-badge.valid   { display: inline-flex; background: var(--caracol-navy-lt); color: var(--caracol-navy); }
   .dur-badge.conflict{ display: inline-flex; background: var(--caracol-red-lt); color: var(--caracol-red); }
 
-  /* Timeline */
-  .tl-scroll { overflow-x: auto; padding-bottom: 4px; margin-top: 4px; }
-  .tl-row  { display: flex; gap: 3px; min-width: max-content; }
-  .tl-lbls { display: flex; gap: 3px; min-width: max-content; margin-top: 2px; }
-  .t-slot { height: 32px; min-width: 38px; border-radius: 5px; display: flex; align-items: center; justify-content: center; font-size: 10px; cursor: pointer; border: 1px solid transparent; transition: all 0.1s; font-family: var(--font-body); }
-  .t-slot.avail    { background: var(--caracol-navy-lt); color: var(--caracol-navy); border-color: #c8d5ef; }
-  .t-slot.avail:hover { background: #d8e4f5; }
-  .t-slot.occup    { background: var(--gray-100); color: var(--gray-400); cursor: not-allowed; }
-  .t-slot.in-range { background: var(--caracol-red-lt); color: var(--caracol-red-dk); border-color: #ffb3be; }
-  .t-slot.range-start { background: var(--caracol-navy); color: white; border-radius: 5px 2px 2px 5px; border-color: var(--caracol-navy); }
-  .t-slot.range-end   { background: var(--caracol-navy); color: white; border-radius: 2px 5px 5px 2px; border-color: var(--caracol-navy); }
-  .t-slot.range-start.range-end { border-radius: 5px; }
-  .t-lbl { min-width: 38px; text-align: center; font-size: 9px; color: var(--gray-400); }
+  /* Visual time grid - replaces timeline */
+  .time-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; margin-top: 8px; }
+  .time-btn { padding: 8px 4px; border-radius: 8px; border: 1.5px solid var(--gray-200); background: white; font-size: 12px; font-family: var(--font-head); font-weight: 600; cursor: pointer; text-align: center; transition: all 0.12s; color: var(--gray-600); }
+  .time-btn:hover:not(.occup):not(.disabled) { border-color: var(--caracol-navy); color: var(--caracol-navy); background: var(--caracol-navy-lt); }
+  .time-btn.occup { background: var(--gray-100); color: var(--gray-300); cursor: not-allowed; border-color: var(--gray-100); font-size: 10px; }
+  .time-btn.sel-start { background: var(--caracol-navy); color: white; border-color: var(--caracol-navy); }
+  .time-btn.sel-end   { background: var(--caracol-red); color: white; border-color: var(--caracol-red); }
+  .time-btn.in-range  { background: var(--caracol-navy-lt); color: var(--caracol-navy); border-color: #c8d5ef; }
+  .time-legend { display: flex; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+  .time-legend-item { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--gray-400); }
+  .time-legend-dot { width: 10px; height: 10px; border-radius: 3px; }
 
   /* Form */
   .form-row { margin-bottom: 14px; }
@@ -416,21 +413,15 @@
       <div class="card">
         <div class="card-title" id="range-title">Selecciona una fecha</div>
         <div id="range-body" style="display:none;">
-          <div class="range-cols">
-            <div class="range-group">
-              <label>Hora inicio</label>
-              <select id="sel-start" onchange="onStartChange()"><option value="">— selecciona —</option></select>
-            </div>
-            <div class="range-group">
-              <label>Hora fin</label>
-              <select id="sel-end" disabled onchange="onEndChange()"><option value="">— selecciona —</option></select>
-            </div>
-          </div>
           <div class="conflict-alert" id="conflict-alert"></div>
           <div class="dur-badge" id="dur-badge"></div>
-          <div class="tl-scroll">
-            <div class="tl-row" id="timeline"></div>
-            <div class="tl-lbls" id="tl-labels"></div>
+          <p style="font-size:11px;color:var(--gray-400);margin-bottom:6px;">Toca <strong style="color:var(--caracol-navy)">inicio</strong> y luego <strong style="color:var(--caracol-red)">fin</strong></p>
+          <div class="time-grid" id="time-grid"></div>
+          <div class="time-legend" style="margin-top:8px;">
+            <div class="time-legend-item"><div class="time-legend-dot" style="background:var(--caracol-navy)"></div>Inicio</div>
+            <div class="time-legend-item"><div class="time-legend-dot" style="background:var(--caracol-red)"></div>Fin</div>
+            <div class="time-legend-item"><div class="time-legend-dot" style="background:var(--caracol-navy-lt);border:1.5px solid #c8d5ef"></div>Rango</div>
+            <div class="time-legend-item"><div class="time-legend-dot" style="background:var(--gray-100)"></div>Ocupado</div>
           </div>
         </div>
       </div>
@@ -704,43 +695,40 @@ function renderRangeSelector(){
   const p=st.date.split('-');
   title.textContent='Horario · '+parseInt(p[2])+' de '+MONTHS[parseInt(p[1])-1];
   body.style.display='block';
-  populateStartSelect();populateEndSelect();renderTimeline();renderDuration();
+  renderTimeGrid();renderDuration();
 }
 
-function populateStartSelect(){
-  const sel=document.getElementById('sel-start'),cur=st.startH;
-  sel.innerHTML='<option value="">— hora inicio —</option>';
-  HOURS.slice(0,-1).forEach(h=>{
-    const blocked=isBlocked(st.space,st.date,h);
-    const opt=document.createElement('option');
-    opt.value=h;opt.textContent=h+(blocked?' · ocupado':'');opt.disabled=blocked;
-    if(h===cur)opt.selected=true;
-    sel.appendChild(opt);
-  });
-}
-function populateEndSelect(){
-  const sel=document.getElementById('sel-end'),cur=st.endH;
-  sel.innerHTML='<option value="">— hora fin —</option>';
-  if(!st.startH){sel.disabled=true;return;}
-  sel.disabled=false;
-  const sm=hToMin(st.startH);
-  HOURS.forEach(h=>{
-    if(hToMin(h)<=sm)return;
-    const opt=document.createElement('option');
-    opt.value=h;opt.textContent=h+' ('+durationLabel(st.startH,h)+')';
-    if(h===cur)opt.selected=true;
-    sel.appendChild(opt);
-  });
+function renderTimeGrid(){
+  const grid=document.getElementById('time-grid');
+  if(!st.date){grid.innerHTML='';return;}
+  const sm=st.startH?hToMin(st.startH):null, em=st.endH?hToMin(st.endH):null;
+  grid.innerHTML=HOURS.slice(0,-1).map(h=>{
+    const hm=hToMin(h), blocked=isBlocked(st.space,st.date,h);
+    let cls='time-btn';
+    if(blocked) cls+=' occup';
+    else if(h===st.startH) cls+=' sel-start';
+    else if(h===st.endH)   cls+=' sel-end';
+    else if(sm!==null&&em!==null&&hm>sm&&hm<em) cls+=' in-range';
+    const label = blocked ? '✕' : h;
+    const onclick = !blocked ? `onclick="timeClick('${h}')"` : '';
+    return `<button class="${cls}" ${onclick} title="${h}">${label}</button>`;
+  }).join('');
 }
 
-function onStartChange(){
-  const v=document.getElementById('sel-start').value;
-  st.startH=v||null;st.endH=null;document.getElementById('sel-end').value='';
-  populateEndSelect();renderTimeline();renderDuration();checkConflictAlert();checkForm();updateSummary();
-}
-function onEndChange(){
-  st.endH=document.getElementById('sel-end').value||null;
-  renderTimeline();renderDuration();checkConflictAlert();checkForm();updateSummary();
+function timeClick(h){
+  if(!st.startH || (st.startH && st.endH)){
+    // Primer clic → hora inicio
+    st.startH=h; st.endH=null;
+  } else {
+    // Segundo clic → hora fin
+    if(hToMin(h)>hToMin(st.startH)){
+      st.endH=h;
+    } else {
+      // Si hace clic antes del inicio, reinicia
+      st.startH=h; st.endH=null;
+    }
+  }
+  renderTimeGrid();renderDuration();checkConflictAlert();checkForm();updateSummary();
 }
 
 function checkConflictAlert(){
@@ -758,34 +746,6 @@ function renderDuration(){
     badge.className='dur-badge '+(conflict?'conflict':'valid');
     badge.textContent=(conflict?'⚠ Conflicto · ':'✓ ')+durationLabel(st.startH,st.endH);
   }else{badge.className='dur-badge';}
-}
-function renderTimeline(){
-  const tl=document.getElementById('timeline'),lbls=document.getElementById('tl-labels');
-  if(!st.date){tl.innerHTML='';lbls.innerHTML='';return;}
-  const sm=st.startH?hToMin(st.startH):null,em=st.endH?hToMin(st.endH):null;
-  const slots=HOURS.slice(0,-1);
-  tl.innerHTML=slots.map(h=>{
-    const hm=hToMin(h),blocked=isBlocked(st.space,st.date,h);
-    let cls='t-slot';
-    if(blocked)cls+=' occup';
-    else if(sm!==null&&em!==null&&hm>=sm&&hm<em){
-      cls+=' in-range';
-      if(hm===sm)cls+=' range-start';
-      if(hm===em-30)cls+=' range-end';
-    }else cls+=' avail';
-    const onclick=!blocked?`onclick="tClick('${h}')"`:'';
-    return `<div class="${cls}" title="${h}" ${onclick}>${h.endsWith(':00')?h.split(':')[0]:'·'}</div>`;
-  }).join('');
-  lbls.innerHTML=slots.filter((_,i)=>i%2===0).map(h=>`<div class="t-lbl">${h}</div>`).join('');
-}
-function tClick(h){
-  if(!st.startH||(st.startH&&st.endH)){
-    st.startH=h;st.endH=null;document.getElementById('sel-start').value=h;populateEndSelect();
-  }else{
-    if(hToMin(h)>hToMin(st.startH)){st.endH=h;document.getElementById('sel-end').value=h;}
-    else{st.startH=h;st.endH=null;document.getElementById('sel-start').value=h;populateEndSelect();}
-  }
-  renderTimeline();renderDuration();checkConflictAlert();checkForm();updateSummary();
 }
 
 async function deleteItem(b){
@@ -819,12 +779,19 @@ function showCancelModal(b, sp, ds){
       if(!isDemoMode){
         await cancelarReserva(b.id);
         await cargarReservas();
+        // Descargar .ics de cancelación y abrir correo
+        enviarCorreo({
+          espacio:sp, fecha:ds,
+          hora_inicio:b.start, hora_fin:b.end,
+          nombre_reservante:b.name, email_reservante:b.email,
+          emails_extra:'', id:b.id
+        }, true);
       } else {
         const k = sp+'|'+ds;
         st.bookings[k] = (st.bookings[k]||[]).filter(x=>!(x.start===b.start&&x.email===b.email));
       }
       overlay.remove();
-      showToast('Reserva cancelada correctamente','success');
+      showToast('Reserva cancelada. Se descargará el .ics para Outlook.','success');
       renderCal(); renderRangeSelector(); renderBookings(); updateSummary();
     }catch(e){
       showToast('Error al cancelar: '+e.message,'error');
@@ -877,6 +844,48 @@ function updateSummary(){
   checkForm();
 }
 
+// ── Generar iCal y enviar por correo ──
+function buildICS(r, cancelled){
+  const EN={'sj5':'Sala de juntas 5to piso','sjp':'Sala de juntas Piso P','cw5':'Coworking 5to piso'};
+  const en=EN[r.espacio]||r.espacio;
+  const fd=r.fecha.replace(/-/g,'');
+  const hi=r.hora_inicio.substring(0,5).replace(':','');
+  const hf=r.hora_fin.substring(0,5).replace(':','');
+  const now=new Date().toISOString().replace(/[-:.]/g,'').substring(0,15)+'Z';
+  const uid=(r.id||Math.random().toString(36).slice(2))+'@caracoltv';
+  const status=cancelled?'CANCELLED':'CONFIRMED';
+  return ['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Caracol TV//ES',
+    'METHOD:'+(cancelled?'CANCEL':'REQUEST'),
+    'BEGIN:VEVENT','UID:'+uid,'DTSTAMP:'+now,
+    'DTSTART;TZID=America/Bogota:'+fd+'T'+hi+'00',
+    'DTEND;TZID=America/Bogota:'+fd+'T'+hf+'00',
+    'SUMMARY:'+(cancelled?'CANCELADA - ':'')+'Reserva - '+en,
+    'DESCRIPTION:Reserva para '+r.nombre_reservante+' en '+en,
+    'LOCATION:'+en+' - Caracol Television',
+    'ORGANIZER;CN=Reservas Caracol TV:mailto:sflorezb@caracoltv.com.co',
+    'STATUS:'+status,'SEQUENCE:'+(cancelled?'1':'0'),
+    'END:VEVENT','END:VCALENDAR'].join('\r\n');
+}
+
+function descargarICS(r, cancelled){
+  const blob=new Blob([buildICS(r,cancelled)],{type:'text/calendar;charset=utf-8'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;a.download=(cancelled?'cancelacion':'reserva')+'.ics';
+  document.body.appendChild(a);a.click();
+  setTimeout(()=>{URL.revokeObjectURL(url);document.body.removeChild(a);},1000);
+}
+
+function enviarCorreo(r, cancelled){
+  const EN={'sj5':'Sala de juntas 5to piso','sjp':'Sala de juntas Piso P','cw5':'Coworking 5to piso'};
+  const en=EN[r.espacio]||r.espacio;
+  const asunto=(cancelled?'Reserva cancelada':'Reserva confirmada')+': '+en+' '+r.fecha;
+  const cuerpo=`Hola ${r.nombre_reservante},\n\n${cancelled?'Tu reserva fue cancelada.':'Tu reserva fue confirmada.'}\n\nEspacio: ${en}\nFecha: ${r.fecha}\nHorario: ${r.hora_inicio} - ${r.hora_fin}\n\nAbre el archivo .ics adjunto para ${cancelled?'eliminar':'agregar'} el evento en tu calendario de Outlook.\n\nReservas Caracol TV`;
+  descargarICS(r, cancelled);
+  const dests=[r.email_reservante,...(r.emails_extra?r.emails_extra.split(',').map(e=>e.trim()).filter(Boolean):[])].join(',');
+  setTimeout(()=>window.open(`mailto:${dests}?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(cuerpo)}`,'_blank'),800);
+}
+
 async function doReserve(){
   const name=document.getElementById('f-name').value.trim(),email=document.getElementById('f-email').value.trim();
   const emailsExtra=document.getElementById('f-emails-extra').value.trim();
@@ -886,19 +895,18 @@ async function doReserve(){
     if(!isDemoMode){
       await crearReserva(st.space,st.date,st.startH,st.endH,name,email,emailsExtra);
       await cargarReservas();
+      enviarCorreo({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,emails_extra:emailsExtra,id:''},false);
     }else{
       const k=st.space+'|'+st.date;
       if(!st.bookings[k])st.bookings[k]=[];
       st.bookings[k].push({start:st.startH,end:st.endH,name,email,id:Date.now().toString()});
     }
-    showToast('¡Reserva confirmada: '+st.startH+' – '+st.endH+'!','success');
+    showToast('¡Reserva confirmada! Se descargará el .ics para Outlook.','success');
     const savedDate=st.date;
     st.startH=null;st.endH=null;
     document.getElementById('f-name').value='';
     document.getElementById('f-email').value='';
     document.getElementById('f-emails-extra').value='';
-    document.getElementById('sel-start').value='';document.getElementById('sel-end').value='';
-    document.getElementById('sel-end').disabled=true;
     document.getElementById('dur-badge').className='dur-badge';
     document.getElementById('conflict-alert').style.display='none';
     st.date=savedDate;
