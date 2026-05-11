@@ -403,7 +403,7 @@
           <button class="cal-btn" id="next-m">&#8250;</button>
         </div>
         <div class="cal-grid" id="cal-grid"></div>
-        <div class="legend">
+        <div class="legend" style="display:none;">
           <div class="leg-item"><div class="leg-dot" style="background:var(--caracol-green)"></div> Disponible</div>
           <div class="leg-item"><div class="leg-dot" style="background:var(--caracol-red)"></div> Ocupado</div>
           <div class="leg-item"><div class="leg-dot" style="background:var(--caracol-navy)"></div> Seleccionado</div>
@@ -439,8 +439,17 @@
           <label>Correo corporativo</label>
           <input type="email" id="f-email" placeholder="nombre@caracoltv.com.co" oninput="validateEmail()" autocomplete="email" />
           <div class="err" id="email-err"></div>
-          <label style="margin-top:10px;display:block;">Correos adicionales <span style="font-weight:400;text-transform:none;font-size:10px;color:var(--gray-400)">(opcional, separados por coma)</span></label>
-          <input type="text" id="f-emails-extra" placeholder="colega1@caracoltv.com.co, colega2@caracoltv.com.co" style="width:100%;padding:10px 12px;border:1px solid var(--gray-200);border-radius:var(--radius-sm);font-size:12px;font-family:var(--font-body);color:var(--gray-900);background:white;margin-bottom:14px;" />
+          <label style="margin-top:10px;display:block;">Correos adicionales <span style="font-weight:400;text-transform:none;font-size:10px;color:var(--gray-400)">(opcional)</span></label>
+          <div style="position:relative;margin-bottom:14px;">
+            <input type="text" id="f-emails-search" placeholder="Buscar colaborador..." oninput="filtrarContactos()"
+              style="width:100%;padding:9px 12px;border:1px solid var(--gray-200);border-radius:var(--radius-sm) var(--radius-sm) 0 0;font-size:12px;font-family:var(--font-body);color:var(--gray-900);background:white;border-bottom:none;"
+              onfocus="this.style.borderColor='var(--caracol-navy)'"
+              onblur="setTimeout(()=>this.style.borderColor='var(--gray-200)',200)"
+            />
+            <div id="contacts-list" style="border:1px solid var(--gray-200);border-radius:0 0 var(--radius-sm) var(--radius-sm);max-height:140px;overflow-y:auto;background:white;"></div>
+            <div id="selected-emails-tags" style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;min-height:0;"></div>
+            <input type="hidden" id="f-emails-extra" value=""/>
+          </div>
           <label class="form-row" style="display:block;">
             <span style="display:block;font-size:10px;font-weight:700;color:var(--caracol-navy);text-transform:uppercase;letter-spacing:0.6px;font-family:var(--font-head);margin-bottom:6px;">
               Motivo de la reunión <span style="font-weight:400;text-transform:none;font-size:10px;color:var(--gray-400);letter-spacing:0">(requerido)</span>
@@ -494,7 +503,7 @@ function doLogin(){
     client_id:     CLIENT_ID,
     response_type: 'id_token token',
     redirect_uri:  REDIRECT_URI,
-    scope:         'openid profile email Calendars.ReadWrite Mail.Send',
+    scope:         'openid profile email Calendars.ReadWrite Mail.Send User.ReadBasic.All',
     response_mode: 'fragment',
     state,
     nonce,
@@ -571,11 +580,11 @@ function setUserUI(session){
   document.getElementById('user-area').innerHTML =
     `<div class="user-pill"><div class="avatar">${session.initials}</div><span>${session.name}</span></div>`;
   loggedEmail = session.email;
-  // Auto-llenar nombre y correo del formulario
   const nameField = document.getElementById('f-name');
   const emailField = document.getElementById('f-email');
   if(nameField && !nameField.value) nameField.value = session.name;
   if(emailField && !emailField.value){ emailField.value = session.email; validateEmail(); }
+  setTimeout(cargarContactosMS, 800);
 }
 
 
@@ -876,15 +885,92 @@ function updateSummary(){
 }
 
 // ── Generar iCal y enviar por correo ──
-// ── Microsoft Graph API — Eventos de calendario Outlook ──
+// ── Lista de contactos Caracol TV ──
+const CONTACTOS = [];
+let selectedEmails = new Set();
+
+async function cargarContactosMS(){
+  const token = getGraphToken();
+  if(!token) return;
+  try{
+    const res = await fetch('https://graph.microsoft.com/v1.0/users?$select=displayName,mail&$top=100&$filter=endswith(mail,\'caracoltv.com.co\')&$orderby=displayName', {
+      headers:{'Authorization':'Bearer '+token}
+    });
+    if(!res.ok) return;
+    const data = await res.json();
+    (data.value||[]).forEach(u=>{
+      if(u.mail && !CONTACTOS.find(c=>c.email===u.mail.toLowerCase())){
+        CONTACTOS.push({name:u.displayName||u.mail, email:u.mail.toLowerCase()});
+      }
+    });
+    renderContactosList('');
+  }catch(e){ console.log('No se pudieron cargar contactos:', e.message); }
+}
+
+function renderContactosList(query){
+  const list = document.getElementById('contacts-list');
+  if(!list) return;
+  const filtered = query
+    ? CONTACTOS.filter(c=>c.name.toLowerCase().includes(query.toLowerCase())||c.email.toLowerCase().includes(query.toLowerCase()))
+    : CONTACTOS;
+  if(!filtered.length){ list.innerHTML='<div style="padding:8px 12px;font-size:11px;color:var(--gray-400);">Sin resultados</div>'; return; }
+  list.innerHTML = filtered.map(c=>`
+    <div onclick="toggleContacto('${c.email}','${c.name.replace(/'/g,'')}')"
+      style="padding:8px 12px;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:8px;border-bottom:0.5px solid var(--gray-100);transition:background 0.1s;"
+      onmouseover="this.style.background='var(--caracol-navy-lt)'" onmouseout="this.style.background='white'">
+      <div style="width:16px;height:16px;border-radius:3px;border:1.5px solid ${selectedEmails.has(c.email)?'var(--caracol-navy)':'var(--gray-200)'};background:${selectedEmails.has(c.email)?'var(--caracol-navy)':'white'};display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+        ${selectedEmails.has(c.email)?'<svg width="10" height="10" viewBox="0 0 10 10"><polyline points="1.5,5 4,7.5 8.5,2.5" stroke="white" stroke-width="1.5" fill="none"/></svg>':''}
+      </div>
+      <div><div style="font-weight:600;color:var(--gray-900);">${c.name}</div><div style="color:var(--gray-400);font-size:10px;">${c.email}</div></div>
+    </div>`).join('');
+}
+
+function toggleContacto(email, name){
+  if(selectedEmails.has(email)) selectedEmails.delete(email);
+  else selectedEmails.add(email);
+  updateSelectedTags();
+  renderContactosList(document.getElementById('f-emails-search').value);
+}
+
+function updateSelectedTags(){
+  const tags = document.getElementById('selected-emails-tags');
+  const hidden = document.getElementById('f-emails-extra');
+  if(!tags||!hidden) return;
+  tags.innerHTML = [...selectedEmails].map(e=>`
+    <span style="display:inline-flex;align-items:center;gap:4px;background:var(--caracol-navy-lt);color:var(--caracol-navy);border-radius:999px;padding:3px 10px;font-size:11px;font-weight:600;font-family:var(--font-head);">
+      ${CONTACTOS.find(c=>c.email===e)?.name.split(' ')[0]||e}
+      <span onclick="toggleContacto('${e}','')" style="cursor:pointer;font-size:13px;line-height:1;color:var(--caracol-navy);margin-left:2px;">×</span>
+    </span>`).join('');
+  hidden.value = [...selectedEmails].join(',');
+}
+
+function filtrarContactos(){
+  renderContactosList(document.getElementById('f-emails-search').value);
+}
+
+function resetContactos(){
+  selectedEmails.clear();
+  updateSelectedTags();
+  const search = document.getElementById('f-emails-search');
+  if(search) search.value='';
+  renderContactosList('');
+}
+
 const ESPACIOS_N={'sj5':'Sala de juntas 5to piso','sjp':'Sala de juntas Piso P','cw5':'Coworking 5to piso'};
 
 async function crearEventoOutlook(r, emailsExtra=''){
   const token=getGraphToken();
   if(!token){showToast('Sesión expirada. Recarga la página para crear el evento en Outlook.','error');return null;}
   const en=ESPACIOS_N[r.espacio]||r.espacio;
+
+  // Construir lista de asistentes — reservante + extras
   const asistentes=[{emailAddress:{address:r.email_reservante,name:r.nombre_reservante},type:'required'}];
-  if(emailsExtra) emailsExtra.split(',').map(e=>e.trim()).filter(Boolean).forEach(e=>asistentes.push({emailAddress:{address:e},type:'required'}));
+  if(emailsExtra){
+    emailsExtra.split(',').map(e=>e.trim()).filter(Boolean).forEach(e=>{
+      if(e !== r.email_reservante) // evitar duplicar el reservante
+        asistentes.push({emailAddress:{address:e},type:'required'});
+    });
+  }
   const evento={
     subject:`Reserva - ${en}${r.motivo?' · '+r.motivo:''}`,
     body:{contentType:'HTML',content:`<p>Reserva confirmada para <strong>${r.nombre_reservante}</strong></p><table style="border-collapse:collapse;font-family:Segoe UI,sans-serif;font-size:13px;"><tr><td style="padding:8px 12px;background:#EEF2FA;font-weight:bold;color:#001F5B;width:120px">Espacio</td><td style="padding:8px 12px;">${en}</td></tr><tr><td style="padding:8px 12px;font-weight:bold;color:#001F5B;">Fecha</td><td style="padding:8px 12px;">${r.fecha}</td></tr><tr><td style="padding:8px 12px;background:#EEF2FA;font-weight:bold;color:#001F5B;">Horario</td><td style="padding:8px 12px;">${r.hora_inicio} – ${r.hora_fin}</td></tr></table>`},
@@ -1003,6 +1089,7 @@ async function doReserve(){
     document.getElementById('f-email').value='';
     document.getElementById('f-emails-extra').value='';
     document.getElementById('f-motivo').value='';
+    resetContactos();
     document.getElementById('dur-badge').className='dur-badge';
     document.getElementById('conflict-alert').style.display='none';
     st.date=savedDate;
