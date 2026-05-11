@@ -284,7 +284,9 @@
   .b-cancel { background: none; border: 1px solid var(--caracol-red); color: var(--caracol-red); border-radius: var(--radius-sm); padding: 4px 10px; font-size: 11px; font-weight: 700; cursor: pointer; font-family: var(--font-head); transition: all 0.15s; white-space: nowrap; }
   .b-cancel:hover { background: var(--caracol-red); color: white; }
   .b-cancel:disabled { opacity: 0.5; cursor: not-allowed; }
-  .b-item.cancelling { opacity: 0.5; pointer-events: none; }
+  .b-edit { background: none; border: 1px solid var(--caracol-navy); color: var(--caracol-navy); border-radius: var(--radius-sm); padding: 4px 10px; font-size: 11px; font-weight: 700; cursor: pointer; font-family: var(--font-head); transition: all 0.15s; white-space: nowrap; }
+  .b-edit:hover { background: var(--caracol-navy); color: white; }
+  .b-motivo { font-size: 10px; color: var(--gray-400); margin-top: 2px; font-style: italic; }
   .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 1000; display: flex; align-items: center; justify-content: center; padding: 20px; }
   .modal-card { background: white; border-radius: var(--radius-lg); padding: 28px 28px 22px; max-width: 400px; width: 100%; box-shadow: 0 8px 32px rgba(0,0,0,0.18); }
   .modal-title { font-family: var(--font-head); font-size: 16px; font-weight: 700; color: var(--caracol-navy); margin-bottom: 8px; }
@@ -653,7 +655,8 @@ async function cargarReservas(){
         name:     r.nombre_reservante||'',
         email:    (r.email_reservante||'').toLowerCase().trim(),
         id:       r.id,
-        outlookId:r.outlook_event_id||''
+        outlookId:r.outlook_event_id||'',
+        motivo:   r.motivo||''
       });
     });
     setSyncing(false,true);
@@ -846,21 +849,92 @@ function renderBookings(){
   if(!bk.length){el.innerHTML='<div class="empty-state">Sin reservas para este día.</div>';return;}
   const sp=st.space, ds=st.date;
   el.innerHTML=bk.map((b,i)=>{
-    const isOwner = isDemoMode || !loggedEmail || 
+    const isOwner = isDemoMode || !loggedEmail ||
       (loggedEmail && b.email.toLowerCase().trim() === loggedEmail.toLowerCase().trim());
-    const cancelBtn = isOwner
-      ? `<button class="b-cancel" onclick="showCancelModal(window._bkCache[${i}],'${sp}','${ds}')">Cancelar</button>`
-      : '';
+    const acciones = isOwner ? `
+      <button class="b-edit" onclick="editarReserva(window._bkCache[${i}],'${sp}','${ds}')">✏ Editar</button>
+      <button class="b-cancel" onclick="showCancelModal(window._bkCache[${i}],'${sp}','${ds}')">Cancelar</button>` : '';
+    const motivo = b.motivo ? `<div class="b-motivo">${b.motivo}</div>` : '';
     return `<div class="b-item">
       <span class="b-time-badge">${b.start} – ${b.end}</span>
-      <div class="b-info"><div class="b-name">${b.name}</div><div class="b-email">${b.email}</div></div>
+      <div class="b-info"><div class="b-name">${b.name}</div><div class="b-email">${b.email}</div>${motivo}</div>
       <span class="b-dur">${durationLabel(b.start,b.end)}</span>
-      ${cancelBtn}
+      <div style="display:flex;gap:6px;flex-shrink:0;">${acciones}</div>
     </div>`;
   }).join('');
-  // Store bookings in window cache for modal access
   window._bkCache = bk;
 }
+
+// ── Editar reserva existente ──
+let editandoReserva = null; // guarda la reserva que se está editando
+
+function editarReserva(b, sp, ds){
+  editandoReserva = b;
+  // Cambiar al espacio y fecha de la reserva
+  st.space = sp; st.date = ds;
+  st.startH = b.start; st.endH = b.end;
+  // Llenar el formulario con los datos existentes
+  document.getElementById('f-name').value = b.name;
+  document.getElementById('f-email').value = b.email;
+  document.getElementById('f-motivo').value = b.motivo||'';
+  // Cambiar el botón a "Actualizar reserva"
+  document.getElementById('btn-text').textContent = '✏ Actualizar reserva';
+  document.getElementById('btn-confirm').disabled = false;
+  // Actualizar UI
+  renderSpaces(); renderCal(); renderRangeSelector(); updateSummary();
+  // Scroll al formulario
+  document.getElementById('btn-confirm').scrollIntoView({behavior:'smooth', block:'center'});
+  showToast('Editando reserva — modifica los datos y confirma.','success');
+}
+
+// Sobreescribir doReserve para manejar edición
+const _doReserveOriginal = doReserve;
+async function doReserve(){
+  if(editandoReserva){
+    // Modo edición: cancelar la reserva anterior y crear una nueva
+    const btn=document.getElementById('btn-confirm'), btnText=document.getElementById('btn-text');
+    btn.disabled=true; btnText.innerHTML='<span class="spinner"></span> Actualizando…';
+    try{
+      if(!isDemoMode){
+        // 1. Cancelar evento de Outlook anterior
+        if(editandoReserva.outlookId) await cancelarEventoOutlook(editandoReserva.outlookId);
+        // 2. Eliminar reserva anterior de Supabase
+        await cancelarReserva(editandoReserva.id);
+        // 3. Crear nueva reserva con datos actualizados
+        const name=document.getElementById('f-name').value.trim();
+        const email=document.getElementById('f-email').value.trim();
+        const emailsExtra=document.getElementById('f-emails-extra').value.trim();
+        const motivo=document.getElementById('f-motivo').value.trim();
+        const outlookId=await crearEventoOutlook({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo},emailsExtra);
+        await crearReserva(st.space,st.date,st.startH,st.endH,name,email,emailsExtra,outlookId||'',motivo);
+        await cargarReservas();
+        // 4. Enviar correo de confirmación actualizada
+        const todos=[email,...(emailsExtra?emailsExtra.split(',').map(e=>e.trim()).filter(Boolean):[])];
+        for(const dest of todos){
+          await enviarCorreoGraph(dest,`✅ Reserva actualizada: ${ESPACIOS_N[st.space]||st.space} · ${st.date}`,buildCorreoHTML({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:dest,motivo},false));
+        }
+      }
+      showToast('¡Reserva actualizada correctamente!','success');
+      editandoReserva = null;
+      document.getElementById('btn-text').textContent = 'Confirmar reserva';
+      st.startH=null; st.endH=null;
+      document.getElementById('f-name').value='';
+      document.getElementById('f-email').value='';
+      document.getElementById('f-emails-extra').value='';
+      document.getElementById('f-motivo').value='';
+      resetContactos();
+      document.getElementById('dur-badge').className='dur-badge';
+      document.getElementById('conflict-alert').style.display='none';
+      renderCal(); renderRangeSelector(); renderBookings(); updateSummary();
+      setUserUI(getSession());
+    }catch(e){ showToast('Error al actualizar: '+e.message,'error'); }
+    btnText.textContent='Confirmar reserva'; checkForm();
+    return;
+  }
+  // Modo normal
+  return _doReserveOriginal();
+}
+
 
 function validateEmail(){
   const v=document.getElementById('f-email').value.trim(),err=document.getElementById('email-err');
@@ -1075,8 +1149,12 @@ async function doReserve(){
       await crearReserva(st.space,st.date,st.startH,st.endH,name,email,emailsExtra,outlookId||'',motivo);
       await cargarReservas();
       // 3. Enviar correo via Graph
-      const dests=[email,...(emailsExtra?emailsExtra.split(',').map(e=>e.trim()).filter(Boolean):[])].join(',');
-      await enviarCorreoGraph(dests,`✅ Reserva confirmada: ${ESPACIOS_N[st.space]||st.space} · ${st.date}`,buildCorreoHTML({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo:motivo},false));
+      // Enviar correo individual a cada destinatario
+      const todosLosCorreos=[email,...(emailsExtra?emailsExtra.split(',').map(e=>e.trim()).filter(Boolean):[])];
+      for(const dest of todosLosCorreos){
+        const htmlDest=buildCorreoHTML({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:dest,motivo:motivo},false);
+        await enviarCorreoGraph(dest,`✅ Reserva confirmada: ${ESPACIOS_N[st.space]||st.space} · ${st.date}`,htmlDest);
+      }
     }else{
       const k=st.space+'|'+st.date;
       if(!st.bookings[k])st.bookings[k]=[];
