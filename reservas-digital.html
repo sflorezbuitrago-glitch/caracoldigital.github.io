@@ -467,6 +467,31 @@
             ></textarea>
           </label>
         </div>
+
+        <!-- RECURRENCIA -->
+        <div style="margin-bottom:14px;">
+          <label style="display:block;font-size:10px;font-weight:700;color:var(--caracol-navy);text-transform:uppercase;letter-spacing:0.6px;font-family:var(--font-head);margin-bottom:6px;">
+            Recurrencia <span style="font-weight:400;text-transform:none;font-size:10px;color:var(--gray-400);letter-spacing:0">(opcional)</span>
+          </label>
+          <select id="f-recurrence" onchange="onRecurrenceChange()"
+            style="width:100%;padding:10px 12px;border:1.5px solid var(--gray-200);border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-body);color:var(--gray-900);background:white;cursor:pointer;">
+            <option value="none">Sin recurrencia (una sola vez)</option>
+            <option value="daily">Diaria</option>
+            <option value="weekly">Semanal (mismo día cada semana)</option>
+            <option value="biweekly">Quincenal (cada 2 semanas)</option>
+            <option value="monthly">Mensual (mismo día cada mes)</option>
+          </select>
+          <div id="recurrence-opts" style="display:none;margin-top:8px;background:var(--caracol-navy-lt);border-radius:var(--radius-sm);padding:10px 12px;border:1px solid #c8d5ef;">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+              <label style="font-size:12px;font-weight:600;color:var(--caracol-navy);">Termina el:</label>
+              <input type="date" id="f-recurrence-end"
+                style="padding:6px 10px;border:1.5px solid #c8d5ef;border-radius:var(--radius-sm);font-size:12px;font-family:var(--font-body);background:white;color:var(--gray-900);"
+              />
+            </div>
+            <div id="recurrence-preview" style="margin-top:8px;font-size:11px;color:var(--caracol-navy);font-weight:600;"></div>
+          </div>
+        </div>
+
         <div class="summary" id="f-summary">Selecciona espacio, fecha, hora de inicio y hora de fin para continuar.</div>
         <button class="btn-confirm" id="btn-confirm" disabled onclick="doReserve()">
           <span id="btn-text">Confirmar reserva</span>
@@ -592,9 +617,9 @@ function setUserUI(session){
 
 
 const SPACES = [
-  {id:'sj5', label:'Sala de juntas 5to piso', icon:'🏢'},
-  {id:'sjp', label:'Sala de juntas Piso P',   icon:'🏛'},
-  {id:'cw5', label:'Coworking 5to piso',       icon:'💼'}
+  {id:'sj5', label:'Sala de juntas Principal - Piso 5', icon:'🏢'},
+  {id:'sjp', label:'Sala de juntas HUB - Piso P', icon:'🏛'},
+  {id:'cw5', label:'Sala de juntas Rincón del Vago - Piso 5', icon:'☕'}
 ];
 const HOURS = ['7:00','7:30','8:00','8:30','9:00','9:30','10:00','10:30','11:00','11:30',
                '12:00','12:30','13:00','13:30','14:00','14:30','15:00','15:30',
@@ -937,6 +962,64 @@ async function doReserve(){
 }
 
 
+// ── Recurrencia ──
+function onRecurrenceChange(){
+  const val = document.getElementById('f-recurrence').value;
+  const opts = document.getElementById('recurrence-opts');
+  opts.style.display = val === 'none' ? 'none' : 'block';
+  // Set default end date (3 months from today)
+  const endInput = document.getElementById('f-recurrence-end');
+  if(!endInput.value && st.date){
+    const d = new Date(st.date);
+    d.setMonth(d.getMonth() + 3);
+    endInput.value = d.toISOString().split('T')[0];
+  }
+  updateRecurrencePreview();
+  checkForm();
+}
+
+function updateRecurrencePreview(){
+  const val = document.getElementById('f-recurrence').value;
+  const endVal = document.getElementById('f-recurrence-end').value;
+  const preview = document.getElementById('recurrence-preview');
+  if(!preview) return;
+  if(val === 'none' || !st.date || !endVal){ preview.textContent=''; return; }
+  const fechas = generarFechasRecurrentes(st.date, val, endVal);
+  preview.textContent = `Se crearán ${fechas.length} reservas (${fechas[0]} → ${fechas[fechas.length-1]})`;
+}
+
+function generarFechasRecurrentes(fechaInicio, tipo, fechaFin){
+  const fechas = [];
+  const inicio = new Date(fechaInicio + 'T12:00:00');
+  const fin    = new Date(fechaFin    + 'T12:00:00');
+  let current  = new Date(inicio);
+
+  while(current <= fin){
+    fechas.push(current.toISOString().split('T')[0]);
+    if(tipo === 'daily')     current.setDate(current.getDate() + 1);
+    else if(tipo === 'weekly')    current.setDate(current.getDate() + 7);
+    else if(tipo === 'biweekly')  current.setDate(current.getDate() + 14);
+    else if(tipo === 'monthly'){
+      const dom = inicio.getDate();
+      current.setMonth(current.getMonth() + 1);
+      current.setDate(dom);
+    }
+    if(fechas.length > 365) break; // Máximo 365 ocurrencias
+  }
+  return fechas;
+}
+
+function resetRecurrence(){
+  const sel = document.getElementById('f-recurrence');
+  if(sel) sel.value = 'none';
+  const opts = document.getElementById('recurrence-opts');
+  if(opts) opts.style.display = 'none';
+  const endInput = document.getElementById('f-recurrence-end');
+  if(endInput) endInput.value = '';
+  const preview = document.getElementById('recurrence-preview');
+  if(preview) preview.textContent = '';
+}
+
 function validateEmail(){
   const v=document.getElementById('f-email').value.trim(),err=document.getElementById('email-err');
   err.textContent=v&&!/^[a-zA-Z0-9._%+\-]+@caracoltv\.com\.co$/.test(v)?'El correo debe ser @caracoltv.com.co':'';
@@ -1238,7 +1321,7 @@ function resetContactos(){
   if(dd) dd.style.display='none';
 }
 
-const ESPACIOS_N={'sj5':'Sala de juntas 5to piso','sjp':'Sala de juntas Piso P','cw5':'Coworking 5to piso'};
+const ESPACIOS_N={'sj5':'Sala de juntas Principal - Piso 5','sjp':'Sala de juntas HUB - Piso P','cw5':'Sala de juntas Rincón del Vago - Piso 5'};
 
 async function crearEventoOutlook(r, emailsExtra=''){
   const token=getGraphToken();
@@ -1342,33 +1425,45 @@ async function doReserve(){
   const name=document.getElementById('f-name').value.trim(),email=document.getElementById('f-email').value.trim();
   const emailsExtra=document.getElementById('f-emails-extra').value.trim();
   const motivo=document.getElementById('f-motivo').value.trim();
+  const recurrencia=document.getElementById('f-recurrence').value;
+  const recurrenciaFin=document.getElementById('f-recurrence-end').value;
   const btn=document.getElementById('btn-confirm'),btnText=document.getElementById('btn-text');
-  btn.disabled=true;btnText.innerHTML='<span class="spinner"></span> Guardando…';
+  btn.disabled=true;
+
+  const fechas=(recurrencia!=='none'&&recurrenciaFin)?generarFechasRecurrentes(st.date,recurrencia,recurrenciaFin):[st.date];
+  const esRecurrente=fechas.length>1;
+  btnText.innerHTML=`<span class="spinner"></span> ${esRecurrente?`Creando ${fechas.length} reservas…`:'Guardando…'}`;
+
   try{
     if(!isDemoMode){
-      // 1. Crear evento en Outlook Calendar
-      const outlookId = await crearEventoOutlook({
-        espacio:st.space, fecha:st.date,
-        hora_inicio:st.startH, hora_fin:st.endH,
-        nombre_reservante:name, email_reservante:email,
-        motivo:motivo
-      }, emailsExtra);
-      // 2. Guardar en Supabase
-      await crearReserva(st.space,st.date,st.startH,st.endH,name,email,emailsExtra,outlookId||'',motivo);
+      let creadas=0;
+      for(const fecha of fechas){
+        try{
+          const outlookId=await crearEventoOutlook({espacio:st.space,fecha,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo},emailsExtra);
+          await crearReserva(st.space,fecha,st.startH,st.endH,name,email,emailsExtra,outlookId||'',motivo);
+          creadas++;
+          btnText.innerHTML=`<span class="spinner"></span> ${creadas}/${fechas.length} reservas…`;
+        }catch(err){console.warn(`Error en fecha ${fecha}:`,err.message);}
+      }
       await cargarReservas();
-      // 3. Enviar correo via Graph
-      // Enviar correo individual a cada destinatario
       const todosLosCorreos=[email,...(emailsExtra?emailsExtra.split(',').map(e=>e.trim()).filter(Boolean):[])];
       for(const dest of todosLosCorreos){
-        const htmlDest=buildCorreoHTML({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:dest,motivo:motivo},false);
-        await enviarCorreoGraph(dest,`✅ Reserva confirmada: ${ESPACIOS_N[st.space]||st.space} · ${st.date}`,htmlDest);
+        const htmlDest=esRecurrente
+          ?buildCorreoRecurrenciaHTML({espacio:st.space,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:dest,motivo,fechas})
+          :buildCorreoHTML({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:dest,motivo},false);
+        const asunto=esRecurrente
+          ?`✅ Reservas recurrentes: ${ESPACIOS_N[st.space]||st.space} (${fechas.length} fechas)`
+          :`✅ Reserva confirmada: ${ESPACIOS_N[st.space]||st.space} · ${st.date}`;
+        await enviarCorreoGraph(dest,asunto,htmlDest);
       }
+      showToast(esRecurrente?`✅ ${fechas.length} reservas creadas en Outlook.`:'✅ Reserva confirmada en Outlook.','success');
     }else{
-      const k=st.space+'|'+st.date;
-      if(!st.bookings[k])st.bookings[k]=[];
-      st.bookings[k].push({start:st.startH,end:st.endH,name,email,id:Date.now().toString()});
+      fechas.forEach(fecha=>{
+        const k=st.space+'|'+fecha;
+        if(!st.bookings[k])st.bookings[k]=[];
+        st.bookings[k].push({start:st.startH,end:st.endH,name,email,id:Date.now().toString()});
+      });
     }
-    showToast('¡Reserva confirmada! El evento fue creado en tu calendario de Outlook.','success');
     const savedDate=st.date;
     st.startH=null;st.endH=null;
     document.getElementById('f-name').value='';
@@ -1376,6 +1471,7 @@ async function doReserve(){
     document.getElementById('f-emails-extra').value='';
     document.getElementById('f-motivo').value='';
     resetContactos();
+    resetRecurrence();
     document.getElementById('dur-badge').className='dur-badge';
     document.getElementById('conflict-alert').style.display='none';
     st.date=savedDate;
@@ -1383,6 +1479,29 @@ async function doReserve(){
     setUserUI(getSession());
   }catch(e){showToast('Error al guardar: '+e.message,'error');}
   btnText.textContent='Confirmar reserva';checkForm();
+}
+
+function buildCorreoRecurrenciaHTML(r){
+  const en=ESPACIOS_N[r.espacio]||r.espacio;
+  const fechasHTML=r.fechas.map(f=>`<li style="padding:3px 0;color:#333;">${f}</li>`).join('');
+  return `<div style="font-family:Segoe UI,Arial,sans-serif;max-width:520px;margin:0 auto;">
+    <div style="background:#001F5B;padding:22px 24px;border-radius:10px 10px 0 0;">
+      <h2 style="color:white;margin:0;font-size:18px;">🔁 Reservas Recurrentes Confirmadas</h2>
+      <p style="color:rgba(255,255,255,0.65);margin:4px 0 0;font-size:12px;">Caracol Televisión · Sistema de Reservas</p>
+    </div>
+    <div style="background:#f7f8fc;padding:22px 24px;border-radius:0 0 10px 10px;border:1px solid #e0e0e0;">
+      <p style="font-size:14px;margin-bottom:16px;">Hola <strong>${r.nombre_reservante}</strong>, tus <strong>${r.fechas.length} reservas recurrentes</strong> fueron confirmadas.</p>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px;">
+        <tr><td style="padding:9px 12px;background:#EEF2FA;font-weight:700;color:#001F5B;width:38%;border-radius:4px;">Espacio</td><td style="padding:9px 12px;">${en}</td></tr>
+        <tr><td style="padding:9px 12px;font-weight:700;color:#001F5B;">Horario</td><td style="padding:9px 12px;">${r.hora_inicio} – ${r.hora_fin}</td></tr>
+        ${r.motivo?`<tr><td style="padding:9px 12px;background:#EEF2FA;font-weight:700;color:#001F5B;border-radius:4px;">Motivo</td><td style="padding:9px 12px;">${r.motivo}</td></tr>`:''}
+      </table>
+      <p style="font-size:12px;font-weight:700;color:#001F5B;margin-bottom:6px;">Fechas programadas (${r.fechas.length}):</p>
+      <ul style="margin:0;padding-left:18px;font-size:12px;">${fechasHTML}</ul>
+      <p style="color:#666;font-size:12px;margin-top:16px;">📅 Cada evento fue agregado a tu calendario de Outlook.</p>
+      <div style="height:4px;background:linear-gradient(90deg,#E8001C,#FFD000,#E8001C);border-radius:2px;margin-top:20px;"></div>
+    </div>
+  </div>`;
 }
 
 function showToast(msg,type){
