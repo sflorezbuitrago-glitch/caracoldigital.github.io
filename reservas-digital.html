@@ -676,15 +676,16 @@ async function cargarReservas(){
       const k = r.espacio+'|'+r.fecha;
       if(!st.bookings[k]) st.bookings[k]=[];
       st.bookings[k].push({
-        start:     r.hora_inicio,
-        end:       r.hora_fin,
-        name:      r.nombre_reservante||'',
-        email:     (r.email_reservante||'').toLowerCase().trim(),
-        id:        r.id,
-        outlookId: r.outlook_event_id||'',
-        outlookUid:r.outlook_uid||r.id||'',
-        motivo:    r.motivo||'',
-        serieId:   r.serie_id||''
+        start:       r.hora_inicio,
+        end:         r.hora_fin,
+        name:        r.nombre_reservante||'',
+        email:       (r.email_reservante||'').toLowerCase().trim(),
+        id:          r.id,
+        outlookId:   r.outlook_event_id||'',
+        outlookUid:  r.outlook_uid||r.id||'',
+        motivo:      r.motivo||'',
+        serieId:     r.serie_id||'',
+        emailsExtra: r.emails_extra||''
       });
     });
     setSyncing(false,true);
@@ -856,17 +857,29 @@ function showCancelModal(b, sp, ds){
     btn.disabled = true; btn.textContent = 'Cancelando…';
     try{
       if(!isDemoMode){
-        // Cancelar evento en Outlook Calendar
+        // 1. Cancelar evento en Outlook del organizador
         if(b.outlookId) await cancelarEventoOutlook(b.outlookId);
-        // Eliminar de Supabase
+        // 2. Eliminar de Supabase
         await cancelarReserva(b.id);
         await cargarReservas();
+        // 3. Construir y enviar correo con .ics METHOD:CANCEL
+        const htmlCancel   = buildCorreoHTML({espacio:sp,fecha:ds,hora_inicio:b.start,hora_fin:b.end,nombre_reservante:b.name,email_reservante:b.email},true);
+        const icsCancel    = buildICSCancel({id:b.outlookUid||b.id,espacio:sp,fecha:ds,hora_inicio:b.start,hora_fin:b.end,nombre_reservante:b.name});
+        const asuntoCancel = `❌ Reserva cancelada: ${ESPACIOS_N[sp]||sp} · ${ds}`;
+        // Enviar al reservante
+        await enviarCancelacionConICS(b.email, asuntoCancel, htmlCancel, icsCancel);
+        // Enviar a extras si los hay
+        if(b.emailsExtra){
+          for(const ex of b.emailsExtra.split(',').map(e=>e.trim()).filter(Boolean)){
+            await enviarCancelacionConICS(ex, asuntoCancel, htmlCancel, icsCancel);
+          }
+        }
       } else {
         const k = sp+'|'+ds;
         st.bookings[k] = (st.bookings[k]||[]).filter(x=>!(x.start===b.start&&x.email===b.email));
       }
       overlay.remove();
-      showToast('Reserva cancelada y eliminada de tu calendario de Outlook.','success');
+      showToast('Reserva cancelada. Se envió correo con cancelación de Outlook.','success');
       renderCal(); renderRangeSelector(); renderBookings(); updateSummary();
     }catch(e){
       showToast('Error al cancelar: '+e.message,'error');
@@ -885,13 +898,20 @@ function renderBookings(){
   el.innerHTML=bk.map((b,i)=>{
     const isOwner = isDemoMode || !loggedEmail ||
       (loggedEmail && b.email.toLowerCase().trim() === loggedEmail.toLowerCase().trim());
+    const serieTag = b.serieId
+      ? '<span style="font-size:9px;background:#EEF2FA;color:var(--caracol-navy);border-radius:999px;padding:2px 7px;font-weight:700;margin-left:4px;">🔁 Serie</span>'
+      : '';
     const acciones = isOwner ? `
       <button class="b-edit" onclick="editarReserva(window._bkCache[${i}],'${sp}','${ds}')">✏ Editar</button>
       <button class="b-cancel" onclick="showCancelModal(window._bkCache[${i}],'${sp}','${ds}')">Cancelar</button>` : '';
     const motivo = b.motivo ? `<div class="b-motivo">${b.motivo}</div>` : '';
     return `<div class="b-item">
       <span class="b-time-badge">${b.start} – ${b.end}</span>
-      <div class="b-info"><div class="b-name">${b.name}</div><div class="b-email">${b.email}</div>${motivo}</div>
+      <div class="b-info">
+        <div class="b-name">${b.name}${serieTag}</div>
+        <div class="b-email">${b.email}</div>
+        ${motivo}
+      </div>
       <span class="b-dur">${durationLabel(b.start,b.end)}</span>
       <div style="display:flex;gap:6px;flex-shrink:0;">${acciones}</div>
     </div>`;
@@ -1439,19 +1459,24 @@ async function enviarCancelacionConICS(destinatario, asunto, htmlBody, icsConten
   }catch(e){ console.error('sendMail+ics error:',e); }
 }
 
-async function crearEventoOutlook(r, emailsExtra=''){
+async function crearEventoOutlook(r, emailsExtra='', sinAsistentes=false){
   const token=getGraphToken();
   if(!token){showToast('Sesión expirada. Recarga la página para crear el evento en Outlook.','error');return null;}
   const en=ESPACIOS_N[r.espacio]||r.espacio;
 
-  // Construir lista de asistentes — reservante + extras
-  const asistentes=[{emailAddress:{address:r.email_reservante,name:r.nombre_reservante},type:'required'}];
-  if(emailsExtra){
-    emailsExtra.split(',').map(e=>e.trim()).filter(Boolean).forEach(e=>{
-      if(e !== r.email_reservante) // evitar duplicar el reservante
-        asistentes.push({emailAddress:{address:e},type:'required'});
-    });
+  // Para series recurrentes (sinAsistentes=true), no agregar asistentes
+  // para evitar que Outlook envíe una invitación por cada ocurrencia
+  const asistentes=[];
+  if(!sinAsistentes){
+    asistentes.push({emailAddress:{address:r.email_reservante,name:r.nombre_reservante},type:'required'});
+    if(emailsExtra){
+      emailsExtra.split(',').map(e=>e.trim()).filter(Boolean).forEach(e=>{
+        if(e !== r.email_reservante)
+          asistentes.push({emailAddress:{address:e},type:'required'});
+      });
+    }
   }
+
   const evento={
     subject:`Reserva - ${en}${r.motivo?' · '+r.motivo:''}`,
     body:{contentType:'HTML',content:`<p>Reserva confirmada para <strong>${r.nombre_reservante}</strong></p><table style="border-collapse:collapse;font-family:Segoe UI,sans-serif;font-size:13px;"><tr><td style="padding:8px 12px;background:#EEF2FA;font-weight:bold;color:#001F5B;width:120px">Espacio</td><td style="padding:8px 12px;">${en}</td></tr><tr><td style="padding:8px 12px;font-weight:bold;color:#001F5B;">Fecha</td><td style="padding:8px 12px;">${r.fecha}</td></tr><tr><td style="padding:8px 12px;background:#EEF2FA;font-weight:bold;color:#001F5B;">Horario</td><td style="padding:8px 12px;">${r.hora_inicio} – ${r.hora_fin}</td></tr></table>`},
@@ -1557,7 +1582,7 @@ async function doReserve(){
       let creadas=0;
       for(const fecha of fechas){
         try{
-          const outlookId=await crearEventoOutlook({espacio:st.space,fecha,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo},emailsExtra);
+          const outlookId=await crearEventoOutlook({espacio:st.space,fecha,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo},emailsExtra, esRecurrente);
           // Pasar serieId para agrupar la serie
           // Generar UID determinístico para poder usarlo al cancelar
           const uid = generarUID(outlookId||'');
@@ -1596,7 +1621,16 @@ async function doReserve(){
     resetRecurrence();
     document.getElementById('dur-badge').className='dur-badge';
     document.getElementById('conflict-alert').style.display='none';
+    // Para series recurrentes, recargar y navegar al mes de la primera fecha
     st.date=savedDate;
+    if(esRecurrente && fechas.length>0){
+      const primerFecha = new Date(fechas[0]+'T12:00:00');
+      st.year=primerFecha.getFullYear();
+      st.month=primerFecha.getMonth();
+      st.date=fechas[0];
+    }
+    // Recargar datos frescos de Supabase
+    await cargarReservas();
     renderCal();renderRangeSelector();renderBookings();updateSummary();
     setUserUI(getSession());
   }catch(e){showToast('Error al guardar: '+e.message,'error');}
