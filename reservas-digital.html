@@ -795,16 +795,17 @@ function renderTimeGrid(){
 }
 
 function timeClick(h){
+  // Un slot es clickeable como INICIO si no está bloqueado O si es el fin exacto de otra reserva
+  const isExactEndSlot = getBookings(st.space,st.date).some(b=>hToMin(h)===hToMin(b.end));
+  const canBeStart = !isBlocked(st.space,st.date,h) || isExactEndSlot;
   if(!st.startH || (st.startH && st.endH)){
-    // Primer clic → hora inicio (no puede ser un slot ocupado)
-    if(isBlocked(st.space,st.date,h)) return;
+    if(!canBeStart) return;
     st.startH=h; st.endH=null;
   } else {
-    // Segundo clic → hora fin
     if(hToMin(h)>hToMin(st.startH)){
       st.endH=h;
     } else {
-      if(isBlocked(st.space,st.date,h)) return;
+      if(!canBeStart) return;
       st.startH=h; st.endH=null;
     }
   }
@@ -960,7 +961,7 @@ async function doReserve(){
         const emailsExtra=document.getElementById('f-emails-extra').value.trim();
         const motivo=document.getElementById('f-motivo').value.trim();
         const outlookId=await crearEventoOutlook({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo},emailsExtra);
-        await crearReserva(st.space,st.date,st.startH,st.endH,name,email,emailsExtra,outlookId||'',motivo);
+        await crearReserva(st.space,st.date,st.startH,st.endH,name,email,emailsExtra,outlookId||'',motivo,'',generarUID(outlookId||''));
         await cargarReservas();
         // 4. Enviar correo de confirmación actualizada
         const todos=[email,...(emailsExtra?emailsExtra.split(',').map(e=>e.trim()).filter(Boolean):[])];
@@ -1582,11 +1583,14 @@ async function doReserve(){
       let creadas=0;
       for(const fecha of fechas){
         try{
-          const outlookId=await crearEventoOutlook({espacio:st.space,fecha,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo},emailsExtra, esRecurrente);
-          // Pasar serieId para agrupar la serie
-          // Generar UID determinístico para poder usarlo al cancelar
-          const uid = generarUID(outlookId||'');
-          await crearReserva(st.space,fecha,st.startH,st.endH,name,email,emailsExtra,outlookId||'',motivo,serieId,uid);
+          // Para series: NO crear evento Outlook por cada fecha (evita flood de notificaciones)
+          // El evento de Outlook se crea solo para reservas individuales
+          let outlookId = '';
+          if(!esRecurrente){
+            outlookId = await crearEventoOutlook({espacio:st.space,fecha,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo},emailsExtra,false) || '';
+          }
+          const uid = generarUID(serieId||outlookId||fecha);
+          await crearReserva(st.space,fecha,st.startH,st.endH,name,email,emailsExtra,outlookId,motivo,serieId,uid);
           creadas++;
           if(esRecurrente) btnText.innerHTML=`<span class="spinner"></span> ${creadas}/${fechas.length} reservas…`;
         }catch(err){console.warn(`Error en fecha ${fecha}:`,err.message);}
