@@ -777,37 +777,42 @@ function renderRangeSelector(){
 
 function renderTimeGrid(){
   const grid=document.getElementById('time-grid');
-  if(!st.date){grid.innerHTML='';return;}
+  if(!st.date||!st.space){grid.innerHTML='';return;}
   const sm=st.startH?hToMin(st.startH):null, em=st.endH?hToMin(st.endH):null;
+  const bookings=getBookings(st.space,st.date);
+
   grid.innerHTML=HOURS.slice(0,-1).map(h=>{
-    const hm=hToMin(h), blocked=isBlocked(st.space,st.date,h);
-    // Slot no bloqueado si coincide exactamente con el FIN de una reserva existente
-    const isExactEnd=getBookings(st.space,st.date).some(b=>hm===hToMin(b.end));
+    const hm=hToMin(h);
+    // Semiabierto [start,end): slot ocupado si hm >= b.start AND hm < b.end
+    const ocupado = bookings.some(b=>hm>=hToMin(b.start)&&hm<hToMin(b.end));
+    // Slot igual al fin exacto de una reserva: LIBRE (permite reserva consecutiva)
+    const esFinExacto = bookings.some(b=>hm===hToMin(b.end));
+    const disponible = !ocupado || esFinExacto;
+
     let cls='time-btn';
-    if(blocked&&!isExactEnd) cls+=' occup';
-    else if(h===st.startH) cls+=' sel-start';
-    else if(h===st.endH)   cls+=' sel-end';
+    if(h===st.startH)       cls+=' sel-start';
+    else if(h===st.endH)    cls+=' sel-end';
     else if(sm!==null&&em!==null&&hm>sm&&hm<em) cls+=' in-range';
-    const label = blocked ? '✕' : h;
-    const onclick = !blocked ? `onclick="timeClick('${h}')"` : '';
-    return `<button class="${cls}" ${onclick} title="${h}">${label}</button>`;
+    else if(!disponible)    cls+=' occup';
+
+    const onclick = disponible ? `onmousedown="timeClick('${h}')"` : '';
+    return `<button class="${cls}" ${onclick} title="${h}">${h}</button>`;
   }).join('');
 }
 
 function timeClick(h){
-  // Un slot es clickeable como INICIO si no está bloqueado O si es el fin exacto de otra reserva
-  const isExactEndSlot = getBookings(st.space,st.date).some(b=>hToMin(h)===hToMin(b.end));
-  const canBeStart = !isBlocked(st.space,st.date,h) || isExactEndSlot;
-  if(!st.startH || (st.startH && st.endH)){
-    if(!canBeStart) return;
+  const hm=hToMin(h);
+  const bookings=getBookings(st.space,st.date);
+  const ocupado=bookings.some(b=>hm>=hToMin(b.start)&&hm<hToMin(b.end));
+  const esFinExacto=bookings.some(b=>hm===hToMin(b.end));
+  const disponible=!ocupado||esFinExacto;
+  if(!disponible) return;
+
+  if(!st.startH||(st.startH&&st.endH)){
     st.startH=h; st.endH=null;
   } else {
-    if(hToMin(h)>hToMin(st.startH)){
-      st.endH=h;
-    } else {
-      if(!canBeStart) return;
-      st.startH=h; st.endH=null;
-    }
+    if(hToMin(h)>hToMin(st.startH)) st.endH=h;
+    else { st.startH=h; st.endH=null; }
   }
   renderTimeGrid();renderDuration();checkConflictAlert();checkForm();updateSummary();
 }
@@ -837,22 +842,43 @@ function showCancelModal(b, sp, ds){
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'cancel-modal';
+  const tieneSerie = !!b.serieId;
   overlay.innerHTML = `
     <div class="modal-card">
       <div class="modal-title">Cancelar reserva</div>
       <div class="modal-body">
-        ¿Estás seguro de que deseas cancelar esta reserva?<br><br>
         <strong>Espacio:</strong> ${SPACES.find(s=>s.id===sp)?.label}<br>
         <strong>Fecha:</strong> ${ds}<br>
         <strong>Horario:</strong> ${b.start} – ${b.end}<br>
         <strong>Reservado por:</strong> ${b.name}
+        ${tieneSerie?'<br><br><strong>⚠ Esta reserva es parte de una serie recurrente.</strong>':''}
       </div>
       <div class="modal-actions">
         <button class="modal-btn" onclick="document.getElementById('cancel-modal').remove()">Volver</button>
-        <button class="modal-btn danger" id="confirm-cancel-btn">Sí, cancelar reserva</button>
+        ${tieneSerie?`<button class="modal-btn" id="confirm-cancel-serie-btn" style="border-color:#E8001C;color:#E8001C;">Cancelar toda la serie</button>`:''}
+        <button class="modal-btn danger" id="confirm-cancel-btn">Cancelar esta fecha</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
+  // Handler cancelar toda la serie
+  if(tieneSerie){
+    document.getElementById('confirm-cancel-serie-btn').onclick = async () => {
+      const btn = document.getElementById('confirm-cancel-serie-btn');
+      btn.disabled=true; btn.textContent='Cancelando serie…';
+      try{
+        if(!isDemoMode){
+          const resultado = await cancelarSerie(b.serieId);
+          // Enviar correo de cancelación de serie
+          const htmlCancel = buildCorreoHTML({espacio:sp,fecha:ds,hora_inicio:b.start,hora_fin:b.end,nombre_reservante:b.name,email_reservante:b.email},true);
+          await enviarCorreoGraph(b.email,`❌ Serie cancelada: ${ESPACIOS_N[sp]||sp}`,htmlCancel);
+        }
+        overlay.remove();
+        showToast(`Serie completa cancelada (${b.serieId?'todas las fechas':''}).`,'success');
+        renderCal();renderRangeSelector();renderBookings();updateSummary();
+      }catch(e){ showToast('Error: '+e.message,'error'); overlay.remove(); }
+    };
+  }
+
   document.getElementById('confirm-cancel-btn').onclick = async () => {
     const btn = document.getElementById('confirm-cancel-btn');
     btn.disabled = true; btn.textContent = 'Cancelando…';
@@ -1583,13 +1609,14 @@ async function doReserve(){
       let creadas=0;
       for(const fecha of fechas){
         try{
-          // Para series: NO crear evento Outlook por cada fecha (evita flood de notificaciones)
-          // El evento de Outlook se crea solo para reservas individuales
-          let outlookId = '';
-          if(!esRecurrente){
-            outlookId = await crearEventoOutlook({espacio:st.space,fecha,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo},emailsExtra,false) || '';
-          }
-          const uid = generarUID(serieId||outlookId||fecha);
+          // Crear evento en Outlook SIN asistentes (evita flood de invitaciones)
+          // El organizador ve la serie en su calendario y puede cancelar fecha a fecha
+          const outlookId = await crearEventoOutlook(
+            {espacio:st.space,fecha,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo},
+            '', // sin asistentes para evitar correos por cada fecha
+            true // sinAsistentes=true
+          ) || '';
+          const uid = generarUID(outlookId||serieId+fecha);
           await crearReserva(st.space,fecha,st.startH,st.endH,name,email,emailsExtra,outlookId,motivo,serieId,uid);
           creadas++;
           if(esRecurrente) btnText.innerHTML=`<span class="spinner"></span> ${creadas}/${fechas.length} reservas…`;
