@@ -689,20 +689,22 @@ async function cargarReservas(){
   }catch(e){setSyncing(false,false);showToast('Error cargando reservas: '+e.message,'error');}
 }
 
-async function crearReserva(espacio,fecha,horaInicio,horaFin,nombreReservante,emailReservante,emailsExtra='',outlookEventId='',motivo=''){
+async function crearReserva(espacio,fecha,horaInicio,horaFin,nombreReservante,emailReservante,emailsExtra='',outlookEventId='',motivo='',serieId=''){
+  const body = {
+    espacio, fecha,
+    hora_inicio: horaInicio,
+    hora_fin: horaFin,
+    nombre_reservante: nombreReservante,
+    email_reservante: emailReservante,
+    emails_extra: emailsExtra,
+    outlook_event_id: outlookEventId,
+    motivo: motivo
+  };
+  if(serieId) body.serie_id = serieId;
   const res = await fetch(`${SUPABASE_URL}/rest/v1/reservas`, {
     method: 'POST',
     headers: { ...HEADERS, 'Prefer': 'return=representation' },
-    body: JSON.stringify({
-      espacio, fecha,
-      hora_inicio: horaInicio,
-      hora_fin: horaFin,
-      nombre_reservante: nombreReservante,
-      email_reservante: emailReservante,
-      emails_extra: emailsExtra,
-      outlook_event_id: outlookEventId,
-      motivo: motivo
-    })
+    body: JSON.stringify(body)
   });
   if(!res.ok){ const e=await res.json(); throw new Error(e.message||'Error al guardar'); }
   const data = await res.json();
@@ -788,14 +790,15 @@ function renderTimeGrid(){
 
 function timeClick(h){
   if(!st.startH || (st.startH && st.endH)){
-    // Primer clic → hora inicio
+    // Primer clic → hora inicio (no puede ser un slot ocupado)
+    if(isBlocked(st.space,st.date,h)) return;
     st.startH=h; st.endH=null;
   } else {
     // Segundo clic → hora fin
     if(hToMin(h)>hToMin(st.startH)){
       st.endH=h;
     } else {
-      // Si hace clic antes del inicio, reinicia
+      if(isBlocked(st.space,st.date,h)) return;
       st.startH=h; st.endH=null;
     }
   }
@@ -1432,6 +1435,8 @@ async function doReserve(){
 
   const fechas=(recurrencia!=='none'&&recurrenciaFin)?generarFechasRecurrentes(st.date,recurrencia,recurrenciaFin):[st.date];
   const esRecurrente=fechas.length>1;
+  // Generar serie_id único para agrupar reservas recurrentes
+  const serieId = esRecurrente ? crypto.randomUUID() : '';
   btnText.innerHTML=`<span class="spinner"></span> ${esRecurrente?`Creando ${fechas.length} reservas…`:'Guardando…'}`;
 
   try{
@@ -1440,23 +1445,25 @@ async function doReserve(){
       for(const fecha of fechas){
         try{
           const outlookId=await crearEventoOutlook({espacio:st.space,fecha,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo},emailsExtra);
-          await crearReserva(st.space,fecha,st.startH,st.endH,name,email,emailsExtra,outlookId||'',motivo);
+          // Pasar serieId para agrupar la serie
+          await crearReserva(st.space,fecha,st.startH,st.endH,name,email,emailsExtra,outlookId||'',motivo,serieId);
           creadas++;
-          btnText.innerHTML=`<span class="spinner"></span> ${creadas}/${fechas.length} reservas…`;
+          if(esRecurrente) btnText.innerHTML=`<span class="spinner"></span> ${creadas}/${fechas.length} reservas…`;
         }catch(err){console.warn(`Error en fecha ${fecha}:`,err.message);}
       }
       await cargarReservas();
+      // UN SOLO CORREO para toda la serie
       const todosLosCorreos=[email,...(emailsExtra?emailsExtra.split(',').map(e=>e.trim()).filter(Boolean):[])];
       for(const dest of todosLosCorreos){
         const htmlDest=esRecurrente
-          ?buildCorreoRecurrenciaHTML({espacio:st.space,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:dest,motivo,fechas})
+          ?buildCorreoRecurrenciaHTML({espacio:st.space,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:dest,motivo,fechas,recurrencia})
           :buildCorreoHTML({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:dest,motivo},false);
         const asunto=esRecurrente
-          ?`✅ Reservas recurrentes: ${ESPACIOS_N[st.space]||st.space} (${fechas.length} fechas)`
+          ?`🔁 Reservas recurrentes confirmadas: ${ESPACIOS_N[st.space]||st.space} (${fechas.length} fechas)`
           :`✅ Reserva confirmada: ${ESPACIOS_N[st.space]||st.space} · ${st.date}`;
         await enviarCorreoGraph(dest,asunto,htmlDest);
       }
-      showToast(esRecurrente?`✅ ${fechas.length} reservas creadas en Outlook.`:'✅ Reserva confirmada en Outlook.','success');
+      showToast(esRecurrente?`✅ ${fechas.length} reservas creadas. Se envió un correo resumen.`:'✅ Reserva confirmada en Outlook.','success');
     }else{
       fechas.forEach(fecha=>{
         const k=st.space+'|'+fecha;
@@ -1483,22 +1490,34 @@ async function doReserve(){
 
 function buildCorreoRecurrenciaHTML(r){
   const en=ESPACIOS_N[r.espacio]||r.espacio;
-  const fechasHTML=r.fechas.map(f=>`<li style="padding:3px 0;color:#333;">${f}</li>`).join('');
-  return `<div style="font-family:Segoe UI,Arial,sans-serif;max-width:520px;margin:0 auto;">
+  const patrones={'daily':'Diaria','weekly':'Semanal','biweekly':'Quincenal','monthly':'Mensual'};
+  const patron=patrones[r.recurrencia]||'Recurrente';
+  // Mostrar todas las fechas o resumir si son muchas
+  const MAX_VISIBLE=20;
+  const fechasVisible=r.fechas.slice(0,MAX_VISIBLE);
+  const resto=r.fechas.length-MAX_VISIBLE;
+  const fechasHTML=fechasVisible.map((f,i)=>`
+    <tr style="background:${i%2===0?'#f7f8fc':'white'}">
+      <td style="padding:5px 12px;color:#333;font-size:12px;">${i+1}.</td>
+      <td style="padding:5px 12px;color:#333;font-size:12px;">${f}</td>
+    </tr>`).join('')+(resto>0?`<tr><td colspan="2" style="padding:5px 12px;color:#666;font-size:11px;font-style:italic;">...y ${resto} fechas más</td></tr>`:'');
+  return `<div style="font-family:Segoe UI,Arial,sans-serif;max-width:540px;margin:0 auto;">
     <div style="background:#001F5B;padding:22px 24px;border-radius:10px 10px 0 0;">
       <h2 style="color:white;margin:0;font-size:18px;">🔁 Reservas Recurrentes Confirmadas</h2>
       <p style="color:rgba(255,255,255,0.65);margin:4px 0 0;font-size:12px;">Caracol Televisión · Sistema de Reservas</p>
     </div>
     <div style="background:#f7f8fc;padding:22px 24px;border-radius:0 0 10px 10px;border:1px solid #e0e0e0;">
-      <p style="font-size:14px;margin-bottom:16px;">Hola <strong>${r.nombre_reservante}</strong>, tus <strong>${r.fechas.length} reservas recurrentes</strong> fueron confirmadas.</p>
+      <p style="font-size:14px;margin-bottom:16px;">Hola <strong>${r.nombre_reservante}</strong>, se confirmaron <strong>${r.fechas.length} reservas recurrentes</strong>.</p>
       <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px;">
-        <tr><td style="padding:9px 12px;background:#EEF2FA;font-weight:700;color:#001F5B;width:38%;border-radius:4px;">Espacio</td><td style="padding:9px 12px;">${en}</td></tr>
-        <tr><td style="padding:9px 12px;font-weight:700;color:#001F5B;">Horario</td><td style="padding:9px 12px;">${r.hora_inicio} – ${r.hora_fin}</td></tr>
-        ${r.motivo?`<tr><td style="padding:9px 12px;background:#EEF2FA;font-weight:700;color:#001F5B;border-radius:4px;">Motivo</td><td style="padding:9px 12px;">${r.motivo}</td></tr>`:''}
+        <tr><td style="padding:9px 12px;background:#EEF2FA;font-weight:700;color:#001F5B;width:38%;">Espacio</td><td style="padding:9px 12px;">${en}</td></tr>
+        <tr><td style="padding:9px 12px;font-weight:700;color:#001F5B;">Recurrencia</td><td style="padding:9px 12px;">${patron}</td></tr>
+        <tr><td style="padding:9px 12px;background:#EEF2FA;font-weight:700;color:#001F5B;">Horario</td><td style="padding:9px 12px;">${r.hora_inicio} – ${r.hora_fin}</td></tr>
+        <tr><td style="padding:9px 12px;font-weight:700;color:#001F5B;">Periodo</td><td style="padding:9px 12px;">${r.fechas[0]} → ${r.fechas[r.fechas.length-1]}</td></tr>
+        ${r.motivo?`<tr><td style="padding:9px 12px;background:#EEF2FA;font-weight:700;color:#001F5B;">Motivo</td><td style="padding:9px 12px;">${r.motivo}</td></tr>`:''}
       </table>
-      <p style="font-size:12px;font-weight:700;color:#001F5B;margin-bottom:6px;">Fechas programadas (${r.fechas.length}):</p>
-      <ul style="margin:0;padding-left:18px;font-size:12px;">${fechasHTML}</ul>
-      <p style="color:#666;font-size:12px;margin-top:16px;">📅 Cada evento fue agregado a tu calendario de Outlook.</p>
+      <p style="font-size:12px;font-weight:700;color:#001F5B;margin-bottom:4px;">📅 Fechas programadas (${r.fechas.length}):</p>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:12px;">${fechasHTML}</table>
+      <p style="color:#666;font-size:12px;">Cada evento fue agregado individualmente a tu calendario de Outlook. Para cancelar toda la serie, cancela cada fecha desde el aplicativo.</p>
       <div style="height:4px;background:linear-gradient(90deg,#E8001C,#FFD000,#E8001C);border-radius:2px;margin-top:20px;"></div>
     </div>
   </div>`;
