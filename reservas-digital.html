@@ -727,21 +727,30 @@ async function cancelarReserva(id){
 // ── Validación server-side via RPC Supabase ─────────────────────────────────
 // Intervalo semiabierto [inicio, fin): inicio_nuevo < fin_existente AND fin_nuevo > inicio_existente
 // excluirId: al editar, evita que la reserva actual se bloquee a sí misma.
+// Si el RPC no está desplegado aún (404) o falla por red, hace fallback al
+// hasConflict() local para que la app siga funcionando sin interrupciones.
 async function verificarDisponibilidadRPC(espacio, fecha, horaInicio, horaFin, excluirId = null){
-  const params = {
-    p_espacio:     espacio,
-    p_fecha:       fecha,
-    p_hora_inicio: horaInicio,
-    p_hora_fin:    horaFin
-  };
-  if(excluirId) params.p_excluir_id = excluirId;
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/verificar_disponibilidad`, {
-    method:  'POST',
-    headers: { ...HEADERS, 'Content-Type': 'application/json' },
-    body:    JSON.stringify(params)
-  });
-  if(!res.ok){ const e=await res.json().catch(()=>({})); throw new Error(e.message||'Error al verificar disponibilidad'); }
-  return await res.json(); // { disponible: bool, razon?, conflicto? }
+  try{
+    const params = {
+      p_espacio:     espacio,
+      p_fecha:       fecha,
+      p_hora_inicio: horaInicio,
+      p_hora_fin:    horaFin
+    };
+    if(excluirId) params.p_excluir_id = excluirId;
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/verificar_disponibilidad`, {
+      method:  'POST',
+      headers: { ...HEADERS, 'Content-Type': 'application/json' },
+      body:    JSON.stringify(params)
+    });
+    if(!res.ok) throw new Error('rpc_not_deployed');
+    return await res.json(); // { disponible: bool, razon?, conflicto? }
+  }catch(e){
+    // Fallback: RPC no disponible → usar validación client-side existente
+    console.info('[RPC fallback] Usando hasConflict local:', e.message);
+    const conflicto = hasConflict(espacio, fecha, horaInicio, horaFin);
+    return { disponible: !conflicto, razon: conflicto ? 'Horario ocupado (validación local)' : null };
+  }
 }
 
 function setSyncing(syncing,ok){
@@ -1635,17 +1644,22 @@ async function doReserve(){
 
   try{
     if(!isDemoMode){
+      // ── PASO 1: Validar TODAS las fechas via RPC antes de crear nada ─────────
+      // La validación va FUERA del try/catch interno para que el error sea visible.
+      // Intervalo semiabierto [inicio, fin): reservas consecutivas perfectas ✅
+      for(const fecha of fechas){
+        const avail = await verificarDisponibilidadRPC(st.space, fecha, st.startH, st.endH);
+        if(!avail.disponible){
+          const c = avail.conflicto;
+          throw new Error(c
+            ? `⛔ Conflicto en ${fecha}: ocupado por ${c.nombre} (${c.hora_inicio}–${c.hora_fin})`
+            : avail.razon || 'Horario no disponible');
+        }
+      }
+      // ── PASO 2: Crear reservas (todas las fechas están libres) ───────────────
       let creadas=0;
       for(const fecha of fechas){
         try{
-          // Validar disponibilidad server-side antes de crear (lógica estricta < y >)
-          const avail = await verificarDisponibilidadRPC(st.space, fecha, st.startH, st.endH);
-          if(!avail.disponible){
-            const c = avail.conflicto;
-            throw new Error(c
-              ? `Conflicto en ${fecha}: ocupado por ${c.nombre} (${c.hora_inicio}–${c.hora_fin})`
-              : avail.razon || 'Horario no disponible');
-          }
           // Crear evento en Outlook SIN asistentes (evita flood de invitaciones)
           // El organizador ve la serie en su calendario y puede cancelar fecha a fecha
           const outlookId = await crearEventoOutlook(
