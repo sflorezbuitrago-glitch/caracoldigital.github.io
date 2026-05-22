@@ -814,9 +814,13 @@ function renderTimeGrid(){
     const hm=hToMin(h);
     // Semiabierto [start,end): slot ocupado si hm >= b.start AND hm < b.end
     const ocupado = bookings.some(b=>hm>=hToMin(b.start)&&hm<hToMin(b.end));
-    // Slot igual al fin exacto de una reserva: LIBRE (permite reserva consecutiva)
+    // Slot = fin exacto de una reserva → siempre libre (reserva consecutiva)
     const esFinExacto = bookings.some(b=>hm===hToMin(b.end));
-    const disponible = !ocupado || esFinExacto;
+    // Slot = inicio exacto de otra reserva → libre SOLO como "fin" (después de elegir inicio)
+    // Esto permite reservar 10:30–11:00 cuando Juan tiene 11:00–11:30 ✅
+    const esInicioExacto = bookings.some(b=>hm===hToMin(b.start));
+    const seleccionandoFin = sm!==null && em===null && hm>sm;
+    const disponible = !ocupado || esFinExacto || (esInicioExacto && seleccionandoFin);
 
     let cls='time-btn';
     if(h===st.startH)       cls+=' sel-start';
@@ -834,7 +838,9 @@ function timeClick(h){
   const bookings=getBookings(st.space,st.date);
   const ocupado=bookings.some(b=>hm>=hToMin(b.start)&&hm<hToMin(b.end));
   const esFinExacto=bookings.some(b=>hm===hToMin(b.end));
-  const disponible=!ocupado||esFinExacto;
+  const esInicioExacto=bookings.some(b=>hm===hToMin(b.start));
+  const seleccionandoFin=st.startH!==null&&st.endH===null&&hm>hToMin(st.startH||'0:00');
+  const disponible=!ocupado||esFinExacto||(esInicioExacto&&seleccionandoFin);
   if(!disponible) return;
 
   if(!st.startH||(st.startH&&st.endH)){
