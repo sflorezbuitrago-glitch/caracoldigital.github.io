@@ -724,6 +724,26 @@ async function cancelarReserva(id){
   if(!res.ok){ const e=await res.json(); throw new Error(e.message||'Error al cancelar'); }
 }
 
+// ── Validación server-side via RPC Supabase ─────────────────────────────────
+// Intervalo semiabierto [inicio, fin): inicio_nuevo < fin_existente AND fin_nuevo > inicio_existente
+// excluirId: al editar, evita que la reserva actual se bloquee a sí misma.
+async function verificarDisponibilidadRPC(espacio, fecha, horaInicio, horaFin, excluirId = null){
+  const params = {
+    p_espacio:     espacio,
+    p_fecha:       fecha,
+    p_hora_inicio: horaInicio,
+    p_hora_fin:    horaFin
+  };
+  if(excluirId) params.p_excluir_id = excluirId;
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/verificar_disponibilidad`, {
+    method:  'POST',
+    headers: { ...HEADERS, 'Content-Type': 'application/json' },
+    body:    JSON.stringify(params)
+  });
+  if(!res.ok){ const e=await res.json().catch(()=>({})); throw new Error(e.message||'Error al verificar disponibilidad'); }
+  return await res.json(); // { disponible: bool, razon?, conflicto? }
+}
+
 function setSyncing(syncing,ok){
   const dot=document.getElementById('sync-dot'),lbl=document.getElementById('sync-label');
   if(syncing){dot.className='sync-dot syncing';lbl.textContent='Sincronizando…';}
@@ -977,6 +997,15 @@ async function doReserve(){
     btn.disabled=true; btnText.innerHTML='<span class="spinner"></span> Actualizando…';
     try{
       if(!isDemoMode){
+        // 0. Verificar disponibilidad del nuevo horario ANTES de tocar nada
+        //    (excluirId = reserva actual, para no auto-bloquearse)
+        const avail = await verificarDisponibilidadRPC(st.space, st.date, st.startH, st.endH, editandoReserva.id);
+        if(!avail.disponible){
+          const c = avail.conflicto;
+          throw new Error(c
+            ? `Horario ocupado por ${c.nombre} (${c.hora_inicio}–${c.hora_fin})`
+            : avail.razon || 'Horario no disponible');
+        }
         // 1. Cancelar evento de Outlook anterior
         if(editandoReserva.outlookId) await cancelarEventoOutlook(editandoReserva.outlookId);
         // 2. Eliminar reserva anterior de Supabase
@@ -1609,6 +1638,14 @@ async function doReserve(){
       let creadas=0;
       for(const fecha of fechas){
         try{
+          // Validar disponibilidad server-side antes de crear (lógica estricta < y >)
+          const avail = await verificarDisponibilidadRPC(st.space, fecha, st.startH, st.endH);
+          if(!avail.disponible){
+            const c = avail.conflicto;
+            throw new Error(c
+              ? `Conflicto en ${fecha}: ocupado por ${c.nombre} (${c.hora_inicio}–${c.hora_fin})`
+              : avail.razon || 'Horario no disponible');
+          }
           // Crear evento en Outlook SIN asistentes (evita flood de invitaciones)
           // El organizador ve la serie en su calendario y puede cancelar fecha a fecha
           const outlookId = await crearEventoOutlook(
