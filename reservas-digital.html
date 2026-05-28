@@ -305,6 +305,8 @@
   .toast.success { background: var(--caracol-green); }
   .toast.error   { background: var(--caracol-red); }
 </style>
+<!-- SheetJS: generación de archivos Excel en el navegador, sin backend -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -379,6 +381,7 @@
     <div class="sync-dot" id="sync-dot"></div>
     <span id="sync-label">Conectado a Microsoft Lists</span>
     <span style="flex:1"></span>
+    <button class="cfg-btn" id="btn-reporte" onclick="abrirModalReporte()" style="border-color:var(--caracol-navy);color:var(--caracol-navy);font-weight:600;">📊 Reporte</button>
     <button class="cfg-btn" id="btn-reconfig">Reconfigurar conexión</button>
   </div>
 
@@ -560,10 +563,11 @@ function handleCallback(){
     return null;
   }
 
-  // Guardar access token para Graph API
+  // Guardar access token con timestamp de expiración (implicit flow = 1 hora)
   if(accessToken){
     graphToken = accessToken;
     sessionStorage.setItem('graph_token', accessToken);
+    sessionStorage.setItem('graph_token_exp', String(Date.now() + 3500000)); // 58 min para dar margen
   }
 
   const claims = parseJwt(idToken);
@@ -580,6 +584,17 @@ function handleCallback(){
 }
 
 function getGraphToken(){
+  const exp = parseInt(sessionStorage.getItem('graph_token_exp')||'0');
+  // Si el token ya expiró, limpiamos sesión y forzamos re-login
+  if(exp && Date.now() > exp){
+    sessionStorage.removeItem('graph_token');
+    sessionStorage.removeItem('graph_token_exp');
+    sessionStorage.removeItem('user_session');
+    graphToken = null;
+    showToast('Sesión expirada. Inicia sesión de nuevo para continuar.', 'error');
+    setTimeout(()=>showScreen('login'), 2000);
+    return null;
+  }
   if(graphToken) return graphToken;
   const t = sessionStorage.getItem('graph_token');
   if(t){ graphToken = t; return t; }
@@ -1560,10 +1575,22 @@ async function crearEventoOutlook(r, emailsExtra='', sinAsistentes=false){
       headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
       body:JSON.stringify(evento)
     });
-    if(!res.ok){const e=await res.json().catch(()=>({}));console.error('Graph error:',e);return null;}
+    if(!res.ok){
+      const e=await res.json().catch(()=>({}));
+      if(res.status===401){
+        sessionStorage.removeItem('graph_token'); sessionStorage.removeItem('graph_token_exp');
+        graphToken=null;
+        throw new Error('Token expirado. Recarga la página e inicia sesión de nuevo.');
+      }
+      if(res.status===403) throw new Error('Sin permiso de Calendario. Verifica los permisos de la app en Azure AD.');
+      throw new Error('Error Outlook (' + res.status + '): ' + (e.error?.message||'desconocido'));
+    }
     const data=await res.json();
     return data.id;
-  }catch(e){console.error('Graph error:',e);return null;}
+  }catch(e){
+    console.error('Graph calendar error:',e.message);
+    throw e; // propagar para que doReserve lo muestre al usuario
+  }
 }
 
 async function cancelarEventoOutlook(eventId){
@@ -1596,12 +1623,22 @@ async function enviarCorreoGraph(destinatarios, asunto, htmlBody){
   };
 
   try{
-    await fetch('https://graph.microsoft.com/v1.0/me/sendMail',{
+    const res=await fetch('https://graph.microsoft.com/v1.0/me/sendMail',{
       method:'POST',
       headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
       body:JSON.stringify(mensaje)
     });
-  }catch(e){ console.error('sendMail error:',e); }
+    if(!res.ok){
+      const e=await res.json().catch(()=>({}));
+      if(res.status===401) throw new Error('Token expirado al enviar correo.');
+      if(res.status===403) throw new Error('Sin permiso Mail.Send. Verifica los permisos de la app en Azure AD.');
+      throw new Error('Error correo (' + res.status + '): ' + (e.error?.message||'desconocido'));
+    }
+  }catch(e){
+    console.error('sendMail error:',e.message);
+    // No propagamos para no cancelar la reserva ya guardada; pero sí avisamos
+    showToast('⚠ Reserva guardada, pero el correo no se pudo enviar: ' + e.message, 'error');
+  }
 }
 
 function buildCorreoHTML(r, cancelled){
@@ -1793,6 +1830,165 @@ document.getElementById('btn-reconfig').onclick=()=>{ showScreen('login'); };
   }
   showScreen('login');
 })();
+// ════════════════════════════════════════════════════════════════
+// MÓDULO: Reporte de uso de salas  (SheetJS + Supabase)
+// ════════════════════════════════════════════════════════════════
+
+// Consulta todas las reservas entre dos fechas (inclusive)
+async function fetchReservasRango(desde, hasta){
+  const url = `${SUPABASE_URL}/rest/v1/reservas`
+    + `?fecha=gte.${desde}&fecha=lte.${hasta}`
+    + `&select=*&order=fecha.asc,hora_inicio.asc`;
+  const res = await fetch(url, { headers: HEADERS });
+  if(!res.ok) throw new Error('Error al consultar Supabase (' + res.status + ')');
+  return await res.json();
+}
+
+// Duración en minutos entre dos strings "HH:MM"
+function duracionMin(inicio, fin){ return hToMin(fin) - hToMin(inicio); }
+
+// Genera y descarga el .xlsx
+async function generarReporteXLSX(desde, hasta){
+  if(!desde || !hasta){ showToast('Selecciona las dos fechas', 'error'); return; }
+  if(desde > hasta){ showToast('La fecha "Desde" debe ser anterior a "Hasta"', 'error'); return; }
+
+  const btn = document.getElementById('btn-dl-reporte');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner" style="width:13px;height:13px;border-width:2px;margin-right:6px;vertical-align:middle;"></span>Generando…';
+
+  try{
+    const reservas = await fetchReservasRango(desde, hasta);
+
+    if(!reservas.length){
+      showToast('No hay reservas en ese período', 'error');
+      btn.disabled = false; btn.textContent = '⬇ Descargar Excel';
+      return;
+    }
+
+    // ── Conteo de uso por sala ──────────────────────────────────
+    const conteo = {};
+    reservas.forEach(r => { conteo[r.espacio] = (conteo[r.espacio]||0) + 1; });
+
+    // ── Hoja 1: Detalle fila por fila ───────────────────────────
+    const detalle = reservas.map(r => {
+      const min = duracionMin(r.hora_inicio, r.hora_fin);
+      return {
+        'ID Sala':               r.espacio,
+        'Nombre de la Sala':     ESPACIOS_N[r.espacio] || r.espacio,
+        'Usuario':               r.nombre_reservante,
+        'Correo':                r.email_reservante,
+        'Fecha':                 r.fecha,
+        'Hora Inicio':           r.hora_inicio,
+        'Hora Fin':              r.hora_fin,
+        'Duración (min)':        min,
+        'Duración (horas)':      parseFloat((min/60).toFixed(2)),
+        'Motivo':                r.motivo || '',
+        'Usos totales de sala':  conteo[r.espacio]
+      };
+    });
+
+    // ── Hoja 2: Resumen por sala ────────────────────────────────
+    const resumenMap = {};
+    reservas.forEach(r => {
+      if(!resumenMap[r.espacio]){
+        resumenMap[r.espacio] = {
+          sala: ESPACIOS_N[r.espacio] || r.espacio,
+          reservas: 0, minutos: 0, usuarios: new Set()
+        };
+      }
+      resumenMap[r.espacio].reservas++;
+      resumenMap[r.espacio].minutos += duracionMin(r.hora_inicio, r.hora_fin);
+      resumenMap[r.espacio].usuarios.add(r.email_reservante);
+    });
+
+    const resumen = Object.values(resumenMap).map(s => ({
+      'Sala':             s.sala,
+      'Total Reservas':   s.reservas,
+      'Total Horas':      parseFloat((s.minutos/60).toFixed(2)),
+      'Usuarios Únicos':  s.usuarios.size,
+      'Promedio min/reserva': parseFloat((s.minutos/s.reservas).toFixed(1))
+    }));
+
+    // ── Crear workbook con SheetJS ──────────────────────────────
+    const wb = XLSX.utils.book_new();
+
+    const wsDetalle = XLSX.utils.json_to_sheet(detalle);
+    wsDetalle['!cols'] = [
+      {wch:8},{wch:36},{wch:28},{wch:32},{wch:12},
+      {wch:10},{wch:10},{wch:14},{wch:14},{wch:40},{wch:18}
+    ];
+    XLSX.utils.book_append_sheet(wb, wsDetalle, 'Detalle de Reservas');
+
+    const wsResumen = XLSX.utils.json_to_sheet(resumen);
+    wsResumen['!cols'] = [{wch:36},{wch:14},{wch:12},{wch:14},{wch:20}];
+    XLSX.utils.book_append_sheet(wb, wsResumen, 'Resumen por Sala');
+
+    // ── Descargar ───────────────────────────────────────────────
+    const nombre = `Reporte_Salas_${desde}_al_${hasta}.xlsx`;
+    XLSX.writeFile(wb, nombre);
+    showToast(`✅ Reporte descargado — ${reservas.length} reservas`, 'success');
+    document.getElementById('modal-reporte')?.remove();
+
+  }catch(e){
+    showToast('Error al generar reporte: ' + e.message, 'error');
+    console.error('Reporte error:', e);
+  }finally{
+    if(btn){ btn.disabled=false; btn.innerHTML='⬇ Descargar Excel'; }
+  }
+}
+
+// Abre el modal con selector de fechas
+function abrirModalReporte(){
+  document.getElementById('modal-reporte')?.remove();
+  const hoy   = new Date();
+  const hasta = hoy.toISOString().split('T')[0];
+  const desde = new Date(hoy.getFullYear(), hoy.getMonth(), 1).toISOString().split('T')[0];
+
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'modal-reporte';
+  overlay.innerHTML = `
+    <div class="modal-card" style="max-width:460px;">
+      <div class="modal-title" style="display:flex;align-items:center;gap:8px;font-size:17px;">
+        📊 Reporte de uso de salas
+      </div>
+      <div class="modal-body" style="margin-bottom:16px;">
+        Selecciona el período. El archivo Excel incluirá <strong>dos hojas</strong>:
+        detalle completo de cada reserva y resumen de totales por sala.
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+        <div>
+          <label style="display:block;font-size:10px;font-weight:700;color:var(--caracol-navy);text-transform:uppercase;letter-spacing:.6px;font-family:var(--font-head);margin-bottom:5px;">Desde</label>
+          <input type="date" id="rpt-desde" value="${desde}"
+            style="width:100%;padding:9px 10px;border:1.5px solid var(--gray-200);border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-body);color:var(--gray-900);"
+            onfocus="this.style.borderColor='var(--caracol-navy)'" onblur="this.style.borderColor='var(--gray-200)'" />
+        </div>
+        <div>
+          <label style="display:block;font-size:10px;font-weight:700;color:var(--caracol-navy);text-transform:uppercase;letter-spacing:.6px;font-family:var(--font-head);margin-bottom:5px;">Hasta</label>
+          <input type="date" id="rpt-hasta" value="${hasta}"
+            style="width:100%;padding:9px 10px;border:1.5px solid var(--gray-200);border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-body);color:var(--gray-900);"
+            onfocus="this.style.borderColor='var(--caracol-navy)'" onblur="this.style.borderColor='var(--gray-200)'" />
+        </div>
+      </div>
+
+      <div style="background:var(--caracol-navy-lt);border-radius:var(--radius-sm);padding:10px 14px;font-size:11px;color:var(--caracol-navy);margin-bottom:18px;line-height:1.8;">
+        <strong>Hoja 1 — Detalle:</strong> ID Sala · Nombre Sala · Usuario · Correo · Fecha · Hora Inicio · Hora Fin · Duración · Motivo · Usos totales<br>
+        <strong>Hoja 2 — Resumen:</strong> Sala · Total Reservas · Total Horas · Usuarios Únicos · Promedio min/reserva
+      </div>
+
+      <div class="modal-actions">
+        <button class="modal-btn" onclick="document.getElementById('modal-reporte').remove()">Cancelar</button>
+        <button class="modal-btn" id="btn-dl-reporte"
+          onclick="generarReporteXLSX(document.getElementById('rpt-desde').value, document.getElementById('rpt-hasta').value)"
+          style="background:var(--caracol-navy);color:white;border-color:var(--caracol-navy);display:flex;align-items:center;gap:6px;">
+          ⬇ Descargar Excel
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
 </script>
 </body>
 </html>
