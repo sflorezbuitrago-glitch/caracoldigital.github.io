@@ -315,9 +315,10 @@
   <div class="topbar-left">
     <div class="brand-logo">
       <svg class="logo-c" viewBox="0 0 220 220" xmlns="http://www.w3.org/2000/svg">
-        <ellipse cx="110" cy="110" rx="100" ry="32" fill="none" stroke="white" stroke-width="16" stroke-linecap="round" transform="rotate(-35 110 110)" stroke-dasharray="490 145"/>
-        <ellipse cx="110" cy="110" rx="62" ry="20" fill="none" stroke="white" stroke-width="11" stroke-linecap="round" transform="rotate(-35 110 110)" stroke-dasharray="300 90"/>
-        <circle cx="110" cy="110" r="32" fill="white"/>
+        <defs><clipPath id="lc1"><circle cx="110" cy="110" r="107"/></clipPath></defs>
+        <path d="M 30,118 C 20,25 114,-41 192,65 C 143,65 18,71 30,118 Z"  fill="white" clip-path="url(#lc1)"/>
+        <circle cx="93" cy="106" r="32" fill="white"/>
+        <path d="M 27,120 C 55,215 147,231 208,142 C 184,178 -22,68 27,120 Z" fill="white" clip-path="url(#lc1)"/>
       </svg>
       <div class="brand-text">
         <span class="brand-name">Caracol TV</span>
@@ -337,10 +338,11 @@
     <div class="login-brand">
       <div class="login-logo-wrap">
         <svg class="login-logo-inner" viewBox="0 0 220 220" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="110" cy="110" r="110" fill="#154A8C"/>
-          <ellipse cx="110" cy="110" rx="100" ry="32" fill="none" stroke="white" stroke-width="16" stroke-linecap="round" transform="rotate(-35 110 110)" stroke-dasharray="490 145"/>
-          <ellipse cx="110" cy="110" rx="62" ry="20" fill="none" stroke="white" stroke-width="11" stroke-linecap="round" transform="rotate(-35 110 110)" stroke-dasharray="300 90"/>
-          <circle cx="110" cy="110" r="32" fill="white"/>
+          <defs><clipPath id="lc2"><circle cx="110" cy="110" r="107"/></clipPath></defs>
+          <circle cx="110" cy="110" r="108" fill="#154A8C"/>
+          <path d="M 30,118 C 20,25 114,-41 192,65 C 143,65 18,71 30,118 Z"  fill="white" clip-path="url(#lc2)"/>
+          <circle cx="93" cy="106" r="32" fill="white"/>
+          <path d="M 27,120 C 55,215 147,231 208,142 C 184,178 -22,68 27,120 Z" fill="white" clip-path="url(#lc2)"/>
         </svg>
       </div>
     </div>
@@ -1390,9 +1392,6 @@ const CONTACTOS_FIJOS = [
   {name:'VILLATE AMAYA JESSY CATHERINE', email:'jcvillat@caracoltv.com.co'},
   {name:'ZAMORA GUZMAN YESSIKA VIVIANA', email:'yvzamora@caracoltv.com.co'},
   {name:'ZULUAGA VALENCIA KEYLA TATIANA', email:'ktzuluag@caracoltv.com.co'},
-  {name:'BARAJAS ACOSTA ALVARO ANDRES', email:'aabaraja@caracoltv.com.co'},
-  {name:'RIBERO DUARTE SUSANA', email:'sriberod@caracoltv.com.co'},
-  {name:'VIGOYA SUAREZ JUANITA', email:'jvigoyas@caracoltv.com.co'},
 ];
 
 
@@ -1546,7 +1545,7 @@ async function enviarCancelacionConICS(destinatario, asunto, htmlBody, icsConten
 
 async function crearEventoOutlook(r, emailsExtra='', sinAsistentes=false){
   const token=getGraphToken();
-  if(!token){showToast('Sesión expirada. Recarga la página para crear el evento en Outlook.','error');return null;}
+  if(!token){ throw new Error('SESION_EXPIRADA: Recarga la página e inicia sesión de nuevo para crear el evento en Outlook.'); }
   const en=ESPACIOS_N[r.espacio]||r.espacio;
 
   // Para series recurrentes (sinAsistentes=true), no agregar asistentes
@@ -1610,7 +1609,7 @@ async function cancelarEventoOutlook(eventId){
 // ── Enviar correo via Microsoft Graph (Mail.Send) ──
 async function enviarCorreoGraph(destinatarios, asunto, htmlBody){
   const token=getGraphToken();
-  if(!token){ console.warn('Sin token — correo omitido'); return; }
+  if(!token){ showToast('⚠ No se pudo enviar el correo: sesión de Microsoft expirada. Recarga la página.', 'error'); return; }
 
   const toRecipients = destinatarios
     .split(',').map(e=>e.trim()).filter(Boolean)
@@ -1701,19 +1700,27 @@ async function doReserve(){
       // ── PASO 2: Crear reservas (todas las fechas están libres) ───────────────
       let creadas=0;
       for(const fecha of fechas){
+        // ── Outlook: intento independiente (no bloquea la reserva si falla) ────
+        let outlookId = '';
         try{
-          // Crear evento en Outlook SIN asistentes (evita flood de invitaciones)
-          // El organizador ve la serie en su calendario y puede cancelar fecha a fecha
-          const outlookId = await crearEventoOutlook(
+          outlookId = await crearEventoOutlook(
             {espacio:st.space,fecha,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo},
-            '', // sin asistentes para evitar correos por cada fecha
-            true // sinAsistentes=true
+            '', true
           ) || '';
-          const uid = generarUID(outlookId||serieId+fecha);
-          await crearReserva(st.space,fecha,st.startH,st.endH,name,email,emailsExtra,outlookId,motivo,serieId,uid);
-          creadas++;
-          if(esRecurrente) btnText.innerHTML=`<span class="spinner"></span> ${creadas}/${fechas.length} reservas…`;
-        }catch(err){console.warn(`Error en fecha ${fecha}:`,err.message);}
+        }catch(outErr){
+          // Sesión expirada o sin permisos → abortar TODO (re-lanzar al catch externo)
+          if(outErr.message.includes('SESION_EXPIRADA') || outErr.message.includes('401') || outErr.message.includes('403') || !getGraphToken()){
+            throw new Error('Sesión de Microsoft expirada. Recarga la página e inicia sesión de nuevo para continuar.');
+          }
+          // Otro error de Outlook → avisar pero continuar (la reserva SÍ se guarda)
+          console.warn(`[Outlook] Error en ${fecha}:`, outErr.message);
+          showToast('⚠ Evento de Outlook no creado para ' + fecha + '. La reserva se guardará igual.', 'error');
+        }
+        // ── Supabase: siempre guardar (con o sin ID de Outlook) ─────────────────
+        const uid = generarUID(outlookId||serieId+fecha);
+        await crearReserva(st.space,fecha,st.startH,st.endH,name,email,emailsExtra,outlookId,motivo,serieId,uid);
+        creadas++;
+        if(esRecurrente) btnText.innerHTML=`<span class="spinner"></span> ${creadas}/${fechas.length} reservas…`;
       }
       await cargarReservas();
       // UN SOLO CORREO para toda la serie
