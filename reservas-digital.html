@@ -1073,6 +1073,12 @@ function editarReserva(b, sp, ds){
   document.getElementById('f-name').value = b.name;
   document.getElementById('f-email').value = b.email;
   document.getElementById('f-motivo').value = b.motivo||'';
+  // ── Restaurar los invitados adicionales en el selector de contactos ──
+  selectedEmails.clear();
+  if(b.emailsExtra){
+    b.emailsExtra.split(',').map(e=>e.trim()).filter(Boolean).forEach(e=>selectedEmails.add(e));
+  }
+  updateSelectedTags(); // actualiza las etiquetas visuales y el campo oculto f-emails-extra
   // Cambiar el botón a "Actualizar reserva"
   document.getElementById('btn-text').textContent = '✏ Actualizar reserva';
   document.getElementById('btn-confirm').disabled = false;
