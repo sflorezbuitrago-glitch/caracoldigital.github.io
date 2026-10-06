@@ -1223,7 +1223,7 @@ const CONTACTOS_FIJOS = [
   {name:'AVILA JIMENEZ CRISTIAN CAMILO', email:'cavila@caracoltv.com.co'},
   {name:'AZA TORRES LUIS GUILLERMO', email:'lgazator@hjck.com'},
   {name:'BALCAZAR VIDAL JOHN EDISON', email:'jebalcaz@caracoltv.com.co'},
-  {name:'MARTINEZ HERNANDEZ MARIA LORENA', email:'mlmartin@caracoltv.com.co'},
+  {name:'BANDERA VELA JUAN PABLO', email:'jpbander@caracoltv.com.co'},
   {name:'BAQUERO ARIAS JUAN CARLOS', email:'jcbaquer@caracoltv.com.co'},
   {name:'BARRANTES BUSTOS JIMM HAWER', email:'jhawerbb@caracoltv.com.co'},
   {name:'BARRERA PERICO NATALY', email:'nbarrera@caracoltv.com.co'},
@@ -1403,9 +1403,6 @@ const CONTACTOS_FIJOS = [
   {name:'VILLANUEVA MONTEALEGRE JOSE EVER', email:'jevillan@caracoltv.com.co'},
   {name:'VILLATE AMAYA JESSY CATHERINE', email:'jcvillat@caracoltv.com.co'},
   {name:'ZAMORA GUZMAN YESSIKA VIVIANA', email:'yvzamora@caracoltv.com.co'},
-  {name:'VIGOYA SUAREZ JUANITA', email:'jvigoyas@caracoltv.com.co'},
-  {name:'RIBERO DUARTE SUSANA', email:'sriberod@caracoltv.com.co'},
-  {name:'VILLAMIL DIAZ ROBINSON DAVID', email:'rdvillam@caracoltv.com.co'},
   {name:'ZULUAGA VALENCIA KEYLA TATIANA', email:'ktzuluag@caracoltv.com.co'},
 ];
 
@@ -1799,12 +1796,13 @@ async function doReserve(){
       let creadas=0;
       const uidsCreados=[]; // {fecha, uid, espacio, hora_inicio, hora_fin}
       for(const fecha of fechas){
-        // ── Outlook: intento independiente (no bloquea la reserva si falla) ────
+        // ── Outlook: crear evento CON asistentes para que les llegue la invitación nativa ──
         let outlookId = '';
         try{
           outlookId = await crearEventoOutlook(
             {espacio:st.space,fecha,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo},
-            '', true
+            emailsExtra,  // ← pasar extras: Outlook envía invitación nativa a cada uno
+            false         // ← sinAsistentes=false: incluir asistentes en el evento
           ) || '';
         }catch(outErr){
           // Sesión expirada o sin permisos → abortar TODO (re-lanzar al catch externo)
@@ -1823,43 +1821,18 @@ async function doReserve(){
         if(esRecurrente) btnText.innerHTML=`<span class="spinner"></span> ${creadas}/${fechas.length} reservas…`;
       }
       await cargarReservas();
-      // ── Correo al organizador (ya tiene el evento en su calendario de Outlook) ──
-      const asuntoOrg=esRecurrente
-        ?`🔁 Reservas recurrentes confirmadas: ${ESPACIOS_N[st.space]||st.space} (${fechas.length} fechas)`
-        :`✅ Reserva confirmada: ${ESPACIOS_N[st.space]||st.space} · ${st.date}`;
-      const htmlOrg=esRecurrente
-        ?buildCorreoRecurrenciaHTML({espacio:st.space,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo,fechas,recurrencia})
-        :buildCorreoHTML({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo},false);
-      await enviarCorreoGraph(email,asuntoOrg,htmlOrg);
-      // ── Invitación de calendario (.ics METHOD:REQUEST) a los extras ──
-      if(emailsExtra){
-        const extras=emailsExtra.split(',').map(e=>e.trim()).filter(Boolean);
-        if(extras.length>0){
-          let icsReq, asuntoExtra, nombreArchivo;
-          if(!esRecurrente){
-            // Reserva de un solo día
-            const u=uidsCreados[0];
-            icsReq=buildICSRequest(
-              {espacio:st.space,fecha:u.fecha,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo},
-              u.uid
-            );
-            asuntoExtra=`📅 Invitación: ${ESPACIOS_N[st.space]||st.space} · ${u.fecha}`;
-            nombreArchivo='invitacion.ics';
-          }else{
-            // Serie de fechas
-            icsReq=buildICSRequestSerie(uidsCreados,name,motivo);
-            asuntoExtra=`📅 Invitación serie: ${ESPACIOS_N[st.space]||st.space} (${uidsCreados.length} fechas)`;
-            nombreArchivo='invitacion-serie.ics';
-          }
-          for(const ex of extras){
-            const htmlEx=esRecurrente
-              ?buildCorreoRecurrenciaHTML({espacio:st.space,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:ex,motivo,fechas,recurrencia})
-              :buildCorreoHTML({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:ex,motivo},false);
-            await enviarInvitacionConICS(ex,asuntoExtra,htmlEx,icsReq,nombreArchivo);
-          }
-        }
+      // ── Correo de confirmación a todos (organizador + extras) ──
+      const todosLosCorreos=[email,...(emailsExtra?emailsExtra.split(',').map(e=>e.trim()).filter(Boolean):[])];
+      for(const dest of todosLosCorreos){
+        const htmlDest=esRecurrente
+          ?buildCorreoRecurrenciaHTML({espacio:st.space,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:dest,motivo,fechas,recurrencia})
+          :buildCorreoHTML({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:dest,motivo},false);
+        const asunto=esRecurrente
+          ?`🔁 Reservas recurrentes confirmadas: ${ESPACIOS_N[st.space]||st.space} (${fechas.length} fechas)`
+          :`✅ Reserva confirmada: ${ESPACIOS_N[st.space]||st.space} · ${st.date}`;
+        await enviarCorreoGraph(dest,asunto,htmlDest);
       }
-      showToast(esRecurrente?`✅ ${fechas.length} reservas creadas. Se enviaron invitaciones de calendario.`:'✅ Reserva confirmada. Se enviaron invitaciones de calendario a los participantes.','success');
+      showToast(esRecurrente?`✅ ${fechas.length} reservas creadas. Invitaciones enviadas a todos los participantes.`:'✅ Reserva confirmada. Invitaciones de Outlook enviadas a todos los participantes.','success');
     }else{
       fechas.forEach(fecha=>{
         const k=st.space+'|'+fecha;
