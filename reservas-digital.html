@@ -913,14 +913,26 @@ function showCancelModal(b, sp, ds){
       const btn = document.getElementById('confirm-cancel-serie-btn');
       btn.disabled=true; btn.textContent='Cancelando serie…';
       try{
+        let totalCanceladas = 0;
         if(!isDemoMode){
           const resultado = await cancelarSerie(b.serieId);
-          // Enviar correo de cancelación de serie
+          totalCanceladas = resultado.canceladas||0;
+          await cargarReservas();
+          // Construir un único ICS con todos los VEVENTs cancelados
+          const icsCancelSerie = buildICSCancelSerie(resultado.reservas);
           const htmlCancel = buildCorreoHTML({espacio:sp,fecha:ds,hora_inicio:b.start,hora_fin:b.end,nombre_reservante:b.name,email_reservante:b.email},true);
-          await enviarCorreoGraph(b.email,`❌ Serie cancelada: ${ESPACIOS_N[sp]||sp}`,htmlCancel);
+          const asuntoCancelSerie = `❌ Serie cancelada: ${ESPACIOS_N[sp]||sp} (${totalCanceladas} fechas)`;
+          // Enviar al reservante con ICS CANCEL adjunto
+          await enviarCancelacionConICS(b.email, asuntoCancelSerie, htmlCancel, icsCancelSerie, 'cancelacion-serie.ics');
+          // Enviar a extras si los hay
+          if(b.emailsExtra){
+            for(const ex of b.emailsExtra.split(',').map(e=>e.trim()).filter(Boolean)){
+              await enviarCancelacionConICS(ex, asuntoCancelSerie, htmlCancel, icsCancelSerie, 'cancelacion-serie.ics');
+            }
+          }
         }
         overlay.remove();
-        showToast(`Serie completa cancelada (${b.serieId?'todas las fechas':''}).`,'success');
+        showToast(`Serie completa cancelada (${totalCanceladas} fechas). Se enviaron correos con cancelación de Outlook.`,'success');
         renderCal();renderRangeSelector();renderBookings();updateSummary();
       }catch(e){ showToast('Error: '+e.message,'error'); overlay.remove(); }
     };
@@ -938,7 +950,7 @@ function showCancelModal(b, sp, ds){
         await cargarReservas();
         // 3. Construir y enviar correo con .ics METHOD:CANCEL
         const htmlCancel   = buildCorreoHTML({espacio:sp,fecha:ds,hora_inicio:b.start,hora_fin:b.end,nombre_reservante:b.name,email_reservante:b.email},true);
-        const icsCancel    = buildICSCancel({id:b.outlookUid||b.id,espacio:sp,fecha:ds,hora_inicio:b.start,hora_fin:b.end,nombre_reservante:b.name});
+        const icsCancel    = buildICSCancel({outlook_uid:b.outlookUid,id:b.id,espacio:sp,fecha:ds,hora_inicio:b.start,hora_fin:b.end,nombre_reservante:b.name});
         const asuntoCancel = `❌ Reserva cancelada: ${ESPACIOS_N[sp]||sp} · ${ds}`;
         // Enviar al reservante
         await enviarCancelacionConICS(b.email, asuntoCancel, htmlCancel, icsCancel);
@@ -1211,7 +1223,7 @@ const CONTACTOS_FIJOS = [
   {name:'AVILA JIMENEZ CRISTIAN CAMILO', email:'cavila@caracoltv.com.co'},
   {name:'AZA TORRES LUIS GUILLERMO', email:'lgazator@hjck.com'},
   {name:'BALCAZAR VIDAL JOHN EDISON', email:'jebalcaz@caracoltv.com.co'},
-  {name:'BANDERA VELA JUAN PABLO', email:'jpbander@caracoltv.com.co'},
+  {name:'MARTINEZ HERNANDEZ MARIA LORENA', email:'mlmartin@caracoltv.com.co'},
   {name:'BAQUERO ARIAS JUAN CARLOS', email:'jcbaquer@caracoltv.com.co'},
   {name:'BARRANTES BUSTOS JIMM HAWER', email:'jhawerbb@caracoltv.com.co'},
   {name:'BARRERA PERICO NATALY', email:'nbarrera@caracoltv.com.co'},
@@ -1391,6 +1403,9 @@ const CONTACTOS_FIJOS = [
   {name:'VILLANUEVA MONTEALEGRE JOSE EVER', email:'jevillan@caracoltv.com.co'},
   {name:'VILLATE AMAYA JESSY CATHERINE', email:'jcvillat@caracoltv.com.co'},
   {name:'ZAMORA GUZMAN YESSIKA VIVIANA', email:'yvzamora@caracoltv.com.co'},
+  {name:'VIGOYA SUAREZ JUANITA', email:'jvigoyas@caracoltv.com.co'},
+  {name:'RIBERO DUARTE SUSANA', email:'sriberod@caracoltv.com.co'},
+  {name:'VILLAMIL DIAZ ROBINSON DAVID', email:'rdvillam@caracoltv.com.co'},
   {name:'ZULUAGA VALENCIA KEYLA TATIANA', email:'ktzuluag@caracoltv.com.co'},
 ];
 
@@ -1499,7 +1514,8 @@ function buildICSRequest(r, uid){
 
 // ── Construir iCal METHOD:CANCEL (cancelación) ──
 function buildICSCancel(r){
-  const uid = generarUID(r.id||r.outlook_uid);
+  // outlook_uid ya es la cadena UID completa guardada al crear la reserva; no re-envolver con generarUID()
+  const uid = r.outlook_uid || generarUID(r.id);
   const en=ESPACIOS_N[r.espacio]||r.espacio;
   const fd=(r.fecha||'').replace(/-/g,'');
   const hi=(r.hora_inicio||r.start||'00:00').substring(0,5).replace(':','');
@@ -1513,6 +1529,57 @@ function buildICSCancel(r){
     'SUMMARY:CANCELADA - Reserva - '+en,
     'STATUS:CANCELLED','SEQUENCE:1',
     'END:VEVENT','END:VCALENDAR'].join('\r\n');
+}
+
+// ── Construir iCal METHOD:REQUEST para invitar a varias personas a una serie ──
+function buildICSRequestSerie(items, nombre_reservante, motivo){
+  // items: [{fecha, uid, espacio, hora_inicio, hora_fin}, ...]
+  const now=new Date().toISOString().replace(/[-:.]/g,'').substring(0,15)+'Z';
+  const lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Caracol TV//Reservas//ES','METHOD:REQUEST'];
+  for(const item of items){
+    const en=ESPACIOS_N[item.espacio]||item.espacio;
+    const fd=item.fecha.replace(/-/g,'');
+    const hi=item.hora_inicio.substring(0,5).replace(':','');
+    const hf=item.hora_fin.substring(0,5).replace(':','');
+    lines.push(
+      'BEGIN:VEVENT',
+      'UID:'+item.uid,'DTSTAMP:'+now,
+      'DTSTART;TZID=America/Bogota:'+fd+'T'+hi+'00',
+      'DTEND;TZID=America/Bogota:'+fd+'T'+hf+'00',
+      'SUMMARY:Reserva - '+en,
+      'DESCRIPTION:Reserva para '+nombre_reservante+(motivo?' — '+motivo:''),
+      'LOCATION:'+en+' - Caracol Televisión',
+      'ORGANIZER;CN=Reservas Caracol TV:mailto:sflorezb@caracoltv.com.co',
+      'STATUS:CONFIRMED','SEQUENCE:0',
+      'END:VEVENT'
+    );
+  }
+  lines.push('END:VCALENDAR');
+  return lines.join('\r\n');
+}
+
+// ── Construir iCal METHOD:CANCEL para una serie completa (múltiples VEVENTs) ──
+function buildICSCancelSerie(reservas){
+  const now=new Date().toISOString().replace(/[-:.]/g,'').substring(0,15)+'Z';
+  const lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Caracol TV//Reservas//ES','METHOD:CANCEL'];
+  for(const r of reservas){
+    const uid=r.outlook_uid||generarUID(r.id);
+    const en=ESPACIOS_N[r.espacio]||r.espacio;
+    const fd=(r.fecha||'').replace(/-/g,'');
+    const hi=(r.hora_inicio||r.start||'00:00').substring(0,5).replace(':','');
+    const hf=(r.hora_fin||r.end||'00:30').substring(0,5).replace(':','');
+    lines.push(
+      'BEGIN:VEVENT',
+      'UID:'+uid,'DTSTAMP:'+now,
+      'DTSTART;TZID=America/Bogota:'+fd+'T'+hi+'00',
+      'DTEND;TZID=America/Bogota:'+fd+'T'+hf+'00',
+      'SUMMARY:CANCELADA - Reserva - '+en,
+      'STATUS:CANCELLED','SEQUENCE:1',
+      'END:VEVENT'
+    );
+  }
+  lines.push('END:VCALENDAR');
+  return lines.join('\r\n');
 }
 
 // ── Adjuntar .ics en correo de cancelación ──
@@ -1541,6 +1608,37 @@ async function enviarCancelacionConICS(destinatario, asunto, htmlBody, icsConten
       body:JSON.stringify(mensaje)
     });
   }catch(e){ console.error('sendMail+ics error:',e); }
+}
+
+// ── Enviar invitación .ics (METHOD:REQUEST) — para que aparezca en el calendario del destinatario ──
+async function enviarInvitacionConICS(destinatario, asunto, htmlBody, icsContent, nombreArchivo='invitacion.ics'){
+  const token=getGraphToken();
+  if(!token){ showToast('⚠ No se pudo enviar la invitación de calendario: sesión expirada. Recarga la página.','error'); return; }
+  const mensaje={
+    message:{
+      subject: asunto,
+      body:{ contentType:'HTML', content: htmlBody },
+      toRecipients:[{emailAddress:{address:destinatario}}],
+      attachments:[{
+        '@odata.type': '#microsoft.graph.fileAttachment',
+        name: nombreArchivo,
+        contentType: 'text/calendar; method=REQUEST; charset=UTF-8',
+        contentBytes: btoa(unescape(encodeURIComponent(icsContent)))
+      }]
+    },
+    saveToSentItems: false
+  };
+  try{
+    const res=await fetch('https://graph.microsoft.com/v1.0/me/sendMail',{
+      method:'POST',
+      headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+      body:JSON.stringify(mensaje)
+    });
+    if(!res.ok){
+      const e=await res.json().catch(()=>({}));
+      console.warn('sendMail+ics-request error:',res.status, e.error?.message);
+    }
+  }catch(e){ console.error('sendMail+ics-request error:',e); }
 }
 
 async function crearEventoOutlook(r, emailsExtra='', sinAsistentes=false){
@@ -1699,6 +1797,7 @@ async function doReserve(){
       }
       // ── PASO 2: Crear reservas (todas las fechas están libres) ───────────────
       let creadas=0;
+      const uidsCreados=[]; // {fecha, uid, espacio, hora_inicio, hora_fin}
       for(const fecha of fechas){
         // ── Outlook: intento independiente (no bloquea la reserva si falla) ────
         let outlookId = '';
@@ -1719,22 +1818,48 @@ async function doReserve(){
         // ── Supabase: siempre guardar (con o sin ID de Outlook) ─────────────────
         const uid = generarUID(outlookId||serieId+fecha);
         await crearReserva(st.space,fecha,st.startH,st.endH,name,email,emailsExtra,outlookId,motivo,serieId,uid);
+        uidsCreados.push({fecha,uid,espacio:st.space,hora_inicio:st.startH,hora_fin:st.endH});
         creadas++;
         if(esRecurrente) btnText.innerHTML=`<span class="spinner"></span> ${creadas}/${fechas.length} reservas…`;
       }
       await cargarReservas();
-      // UN SOLO CORREO para toda la serie
-      const todosLosCorreos=[email,...(emailsExtra?emailsExtra.split(',').map(e=>e.trim()).filter(Boolean):[])];
-      for(const dest of todosLosCorreos){
-        const htmlDest=esRecurrente
-          ?buildCorreoRecurrenciaHTML({espacio:st.space,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:dest,motivo,fechas,recurrencia})
-          :buildCorreoHTML({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:dest,motivo},false);
-        const asunto=esRecurrente
-          ?`🔁 Reservas recurrentes confirmadas: ${ESPACIOS_N[st.space]||st.space} (${fechas.length} fechas)`
-          :`✅ Reserva confirmada: ${ESPACIOS_N[st.space]||st.space} · ${st.date}`;
-        await enviarCorreoGraph(dest,asunto,htmlDest);
+      // ── Correo al organizador (ya tiene el evento en su calendario de Outlook) ──
+      const asuntoOrg=esRecurrente
+        ?`🔁 Reservas recurrentes confirmadas: ${ESPACIOS_N[st.space]||st.space} (${fechas.length} fechas)`
+        :`✅ Reserva confirmada: ${ESPACIOS_N[st.space]||st.space} · ${st.date}`;
+      const htmlOrg=esRecurrente
+        ?buildCorreoRecurrenciaHTML({espacio:st.space,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo,fechas,recurrencia})
+        :buildCorreoHTML({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo},false);
+      await enviarCorreoGraph(email,asuntoOrg,htmlOrg);
+      // ── Invitación de calendario (.ics METHOD:REQUEST) a los extras ──
+      if(emailsExtra){
+        const extras=emailsExtra.split(',').map(e=>e.trim()).filter(Boolean);
+        if(extras.length>0){
+          let icsReq, asuntoExtra, nombreArchivo;
+          if(!esRecurrente){
+            // Reserva de un solo día
+            const u=uidsCreados[0];
+            icsReq=buildICSRequest(
+              {espacio:st.space,fecha:u.fecha,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo},
+              u.uid
+            );
+            asuntoExtra=`📅 Invitación: ${ESPACIOS_N[st.space]||st.space} · ${u.fecha}`;
+            nombreArchivo='invitacion.ics';
+          }else{
+            // Serie de fechas
+            icsReq=buildICSRequestSerie(uidsCreados,name,motivo);
+            asuntoExtra=`📅 Invitación serie: ${ESPACIOS_N[st.space]||st.space} (${uidsCreados.length} fechas)`;
+            nombreArchivo='invitacion-serie.ics';
+          }
+          for(const ex of extras){
+            const htmlEx=esRecurrente
+              ?buildCorreoRecurrenciaHTML({espacio:st.space,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:ex,motivo,fechas,recurrencia})
+              :buildCorreoHTML({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:ex,motivo},false);
+            await enviarInvitacionConICS(ex,asuntoExtra,htmlEx,icsReq,nombreArchivo);
+          }
+        }
       }
-      showToast(esRecurrente?`✅ ${fechas.length} reservas creadas. Se envió un correo resumen.`:'✅ Reserva confirmada en Outlook.','success');
+      showToast(esRecurrente?`✅ ${fechas.length} reservas creadas. Se enviaron invitaciones de calendario.`:'✅ Reserva confirmada. Se enviaron invitaciones de calendario a los participantes.','success');
     }else{
       fechas.forEach(fecha=>{
         const k=st.space+'|'+fecha;
