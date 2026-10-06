@@ -731,6 +731,62 @@ async function cancelarReserva(id){
   if(!res.ok){ const e=await res.json(); throw new Error(e.message||'Error al cancelar'); }
 }
 
+// ── Actualizar reserva existente en Supabase (PATCH — sin borrar ni duplicar) ──
+async function actualizarReserva(id, datos){
+  const body = {
+    espacio:            datos.espacio,
+    fecha:              datos.fecha,
+    hora_inicio:        datos.hora_inicio,
+    hora_fin:           datos.hora_fin,
+    nombre_reservante:  datos.nombre_reservante,
+    email_reservante:   datos.email_reservante,
+    emails_extra:       datos.emails_extra||'',
+    motivo:             datos.motivo||'',
+    outlook_event_id:   datos.outlook_event_id||''
+  };
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/reservas?id=eq.${id}`, {
+    method: 'PATCH',
+    headers: { ...HEADERS, 'Prefer': 'return=minimal' },
+    body: JSON.stringify(body)
+  });
+  if(!res.ok){ const e=await res.json().catch(()=>({})); throw new Error(e.message||'Error actualizando reserva'); }
+}
+
+// ── Actualizar evento existente en Outlook (PATCH — Exchange notifica cambio a todos los asistentes) ──
+async function actualizarEventoOutlook(eventId, r){
+  const token=getGraphToken();
+  if(!token){ throw new Error('SESION_EXPIRADA: Recarga la página e inicia sesión de nuevo.'); }
+  if(!eventId) return null;
+  const en=ESPACIOS_N[r.espacio]||r.espacio;
+  const asistentes=[];
+  asistentes.push({emailAddress:{address:r.email_reservante,name:r.nombre_reservante},type:'required'});
+  if(r.emailsExtra){
+    r.emailsExtra.split(',').map(e=>e.trim()).filter(Boolean).forEach(e=>{
+      if(e!==r.email_reservante) asistentes.push({emailAddress:{address:e},type:'required'});
+    });
+  }
+  const cambios={
+    subject:`Reserva - ${en}${r.motivo?' · '+r.motivo:''}`,
+    body:{contentType:'HTML',content:`<p>Reserva <strong>actualizada</strong> para <strong>${r.nombre_reservante}</strong></p><table style="border-collapse:collapse;font-family:Segoe UI,sans-serif;font-size:13px;"><tr><td style="padding:8px 12px;background:#EEF2FA;font-weight:bold;color:#001F5B;width:120px">Espacio</td><td style="padding:8px 12px;">${en}</td></tr><tr><td style="padding:8px 12px;font-weight:bold;color:#001F5B;">Fecha</td><td style="padding:8px 12px;">${r.fecha}</td></tr><tr><td style="padding:8px 12px;background:#EEF2FA;font-weight:bold;color:#001F5B;">Horario</td><td style="padding:8px 12px;">${r.hora_inicio} – ${r.hora_fin}</td></tr></table>`},
+    start:{dateTime:`${r.fecha}T${r.hora_inicio}:00`,timeZone:'America/Bogota'},
+    end:{dateTime:`${r.fecha}T${r.hora_fin}:00`,timeZone:'America/Bogota'},
+    location:{displayName:`${en} - Caracol Televisión`},
+    attendees:asistentes
+  };
+  const res=await fetch(`https://graph.microsoft.com/v1.0/me/events/${eventId}`,{
+    method:'PATCH',
+    headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json'},
+    body:JSON.stringify(cambios)
+  });
+  if(!res.ok){
+    const e=await res.json().catch(()=>({}));
+    if(res.status===401||res.status===403) throw new Error('SESION_EXPIRADA: Recarga la página e inicia sesión de nuevo.');
+    throw new Error('Error actualizando evento Outlook: '+(e.error?.message||res.status));
+  }
+  const data=await res.json();
+  return data.id;
+}
+
 // ── Validación server-side via RPC Supabase ─────────────────────────────────
 // Intervalo semiabierto [inicio, fin): inicio_nuevo < fin_existente AND fin_nuevo > inicio_existente
 // excluirId: al editar, evita que la reserva actual se bloquee a sí misma.
@@ -1031,41 +1087,59 @@ function editarReserva(b, sp, ds){
 const _doReserveOriginal = doReserve;
 async function doReserve(){
   if(editandoReserva){
-    // Modo edición: cancelar la reserva anterior y crear una nueva
+    // Modo edición: PATCH en la misma reserva — sin borrar, sin duplicar
     const btn=document.getElementById('btn-confirm'), btnText=document.getElementById('btn-text');
     btn.disabled=true; btnText.innerHTML='<span class="spinner"></span> Actualizando…';
     try{
+      const name=document.getElementById('f-name').value.trim();
+      const email=document.getElementById('f-email').value.trim();
+      const emailsExtra=document.getElementById('f-emails-extra').value.trim();
+      const motivo=document.getElementById('f-motivo').value.trim();
+
       if(!isDemoMode){
-        // 0. Verificar disponibilidad del nuevo horario ANTES de tocar nada
-        //    (excluirId = reserva actual, para no auto-bloquearse)
-        const avail = await verificarDisponibilidadRPC(st.space, st.date, st.startH, st.endH, editandoReserva.id);
+        // 0. Verificar disponibilidad excluyendo la reserva actual (para no bloquearse a sí misma)
+        const avail=await verificarDisponibilidadRPC(st.space,st.date,st.startH,st.endH,editandoReserva.id);
         if(!avail.disponible){
-          const c = avail.conflicto;
-          throw new Error(c
-            ? `Horario ocupado por ${c.nombre} (${c.hora_inicio}–${c.hora_fin})`
-            : avail.razon || 'Horario no disponible');
+          const c=avail.conflicto;
+          throw new Error(c?`Horario ocupado por ${c.nombre} (${c.hora_inicio}–${c.hora_fin})`:avail.razon||'Horario no disponible');
         }
-        // 1. Cancelar evento de Outlook anterior
-        if(editandoReserva.outlookId) await cancelarEventoOutlook(editandoReserva.outlookId);
-        // 2. Eliminar reserva anterior de Supabase
-        await cancelarReserva(editandoReserva.id);
-        // 3. Crear nueva reserva con datos actualizados
-        const name=document.getElementById('f-name').value.trim();
-        const email=document.getElementById('f-email').value.trim();
-        const emailsExtra=document.getElementById('f-emails-extra').value.trim();
-        const motivo=document.getElementById('f-motivo').value.trim();
-        const outlookId=await crearEventoOutlook({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo},emailsExtra);
-        await crearReserva(st.space,st.date,st.startH,st.endH,name,email,emailsExtra,outlookId||'',motivo,'',generarUID(outlookId||''));
+
+        // 1. Actualizar evento en Outlook (PATCH) — Exchange envía notificación de cambio a TODOS los asistentes
+        let outlookId=editandoReserva.outlookId;
+        try{
+          if(outlookId){
+            // Evento ya existe → actualizarlo (asistentes recibirán "Reunión actualizada")
+            await actualizarEventoOutlook(outlookId,{espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo,emailsExtra});
+          }else{
+            // No había evento de Outlook → crear uno nuevo con todos los asistentes
+            outlookId=await crearEventoOutlook({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo},emailsExtra,false)||'';
+          }
+        }catch(outErr){
+          if(outErr.message.includes('SESION_EXPIRADA')||outErr.message.includes('401')||outErr.message.includes('403')){
+            throw new Error('Sesión de Microsoft expirada. Recarga la página e inicia sesión de nuevo.');
+          }
+          console.warn('[Outlook] Error al actualizar evento:', outErr.message);
+          showToast('⚠ Evento de Outlook no actualizado. La reserva sí se actualizará.','error');
+        }
+
+        // 2. Actualizar el registro existente en Supabase (PATCH — mismo ID, sin duplicar)
+        await actualizarReserva(editandoReserva.id,{
+          espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,
+          nombre_reservante:name,email_reservante:email,emails_extra:emailsExtra,
+          motivo,outlook_event_id:outlookId
+        });
         await cargarReservas();
-        // 4. Enviar correo de confirmación actualizada
+
+        // 3. Correo de confirmación de actualización a todos
         const todos=[email,...(emailsExtra?emailsExtra.split(',').map(e=>e.trim()).filter(Boolean):[])];
         for(const dest of todos){
-          await enviarCorreoGraph(dest,`✅ Reserva actualizada: ${ESPACIOS_N[st.space]||st.space} · ${st.date}`,buildCorreoHTML({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:dest,motivo},false));
+          await enviarCorreoGraph(dest,`✅ Reserva actualizada: ${ESPACIOS_N[st.space]||st.space} · ${st.date}`,
+            buildCorreoHTML({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:dest,motivo},false));
         }
       }
-      showToast('¡Reserva actualizada correctamente!','success');
-      editandoReserva = null;
-      document.getElementById('btn-text').textContent = 'Confirmar reserva';
+      showToast('¡Reserva actualizada correctamente! Los participantes recibirán la notificación del cambio.','success');
+      editandoReserva=null;
+      document.getElementById('btn-text').textContent='Confirmar reserva';
       st.startH=null; st.endH=null;
       document.getElementById('f-name').value='';
       document.getElementById('f-email').value='';
