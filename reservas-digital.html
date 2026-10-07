@@ -637,6 +637,8 @@ const MONTHS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto
 const DAYS = ['Do','Lu','Ma','Mi','Ju','Vi','Sa'];
 
 function hToMin(h){const[hh,mm]=h.split(':').map(Number);return hh*60+(mm||0);}
+// Garantiza hh:mm con dos dígitos (necesario para Graph API e ICS: 7:30 → 07:30)
+function padHora(h){const[hh,mm]=(h||'00:00').split(':');return hh.padStart(2,'0')+':'+(mm||'00').padStart(2,'0');}
 function durationLabel(s,e){const m=hToMin(e)-hToMin(s);if(m<=0)return'';const h=Math.floor(m/60),mn=m%60;return(h>0?h+'h ':'')+(mn>0?mn+'min':'').trim();}
 
 let isDemoMode = false, loggedEmail = null;
@@ -782,8 +784,8 @@ async function actualizarEventoOutlook(eventId, r){
   const cambios={
     subject:`Reserva - ${en}${r.motivo?' · '+r.motivo:''}`,
     body:{contentType:'HTML',content:`<p>Reserva <strong>actualizada</strong> para <strong>${r.nombre_reservante}</strong></p><table style="border-collapse:collapse;font-family:Segoe UI,sans-serif;font-size:13px;"><tr><td style="padding:8px 12px;background:#EEF2FA;font-weight:bold;color:#001F5B;width:120px">Espacio</td><td style="padding:8px 12px;">${en}</td></tr><tr><td style="padding:8px 12px;font-weight:bold;color:#001F5B;">Fecha</td><td style="padding:8px 12px;">${r.fecha}</td></tr><tr><td style="padding:8px 12px;background:#EEF2FA;font-weight:bold;color:#001F5B;">Horario</td><td style="padding:8px 12px;">${r.hora_inicio} – ${r.hora_fin}</td></tr></table>`},
-    start:{dateTime:`${r.fecha}T${r.hora_inicio}:00`,timeZone:'America/Bogota'},
-    end:{dateTime:`${r.fecha}T${r.hora_fin}:00`,timeZone:'America/Bogota'},
+    start:{dateTime:`${r.fecha}T${padHora(r.hora_inicio)}:00`,timeZone:'America/Bogota'},
+    end:{dateTime:`${r.fecha}T${padHora(r.hora_fin)}:00`,timeZone:'America/Bogota'},
     location:{displayName:`${en} - Caracol Televisión`},
     attendees:asistentes
   };
@@ -1516,8 +1518,8 @@ function generarUID(id){
 function buildICSRequest(r, uid){
   const en=ESPACIOS_N[r.espacio]||r.espacio;
   const fd=r.fecha.replace(/-/g,'');
-  const hi=r.hora_inicio.substring(0,5).replace(':','');
-  const hf=r.hora_fin.substring(0,5).replace(':','');
+  const hi=padHora(r.hora_inicio).replace(':','');
+  const hf=padHora(r.hora_fin).replace(':','');
   const now=new Date().toISOString().replace(/[-:.]/g,'').substring(0,15)+'Z';
   return ['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Caracol TV//Reservas//ES',
     'METHOD:REQUEST','BEGIN:VEVENT',
@@ -1538,8 +1540,8 @@ function buildICSCancel(r){
   const uid = r.outlook_uid || generarUID(r.id);
   const en=ESPACIOS_N[r.espacio]||r.espacio;
   const fd=(r.fecha||'').replace(/-/g,'');
-  const hi=(r.hora_inicio||r.start||'00:00').substring(0,5).replace(':','');
-  const hf=(r.hora_fin||r.end||'00:30').substring(0,5).replace(':','');
+  const hi=padHora(r.hora_inicio||r.start||'00:00').replace(':','');
+  const hf=padHora(r.hora_fin||r.end||'00:30').replace(':','');
   const now=new Date().toISOString().replace(/[-:.]/g,'').substring(0,15)+'Z';
   return ['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Caracol TV//Reservas//ES',
     'METHOD:CANCEL','BEGIN:VEVENT',
@@ -1559,8 +1561,8 @@ function buildICSRequestSerie(items, nombre_reservante, motivo){
   for(const item of items){
     const en=ESPACIOS_N[item.espacio]||item.espacio;
     const fd=item.fecha.replace(/-/g,'');
-    const hi=item.hora_inicio.substring(0,5).replace(':','');
-    const hf=item.hora_fin.substring(0,5).replace(':','');
+    const hi=padHora(item.hora_inicio).replace(':','');
+    const hf=padHora(item.hora_fin).replace(':','');
     lines.push(
       'BEGIN:VEVENT',
       'UID:'+item.uid,'DTSTAMP:'+now,
@@ -1586,8 +1588,8 @@ function buildICSCancelSerie(reservas){
     const uid=r.outlook_uid||generarUID(r.id);
     const en=ESPACIOS_N[r.espacio]||r.espacio;
     const fd=(r.fecha||'').replace(/-/g,'');
-    const hi=(r.hora_inicio||r.start||'00:00').substring(0,5).replace(':','');
-    const hf=(r.hora_fin||r.end||'00:30').substring(0,5).replace(':','');
+    const hi=padHora(r.hora_inicio||r.start||'00:00').replace(':','');
+    const hf=padHora(r.hora_fin||r.end||'00:30').replace(':','');
     lines.push(
       'BEGIN:VEVENT',
       'UID:'+uid,'DTSTAMP:'+now,
@@ -1682,8 +1684,8 @@ async function crearEventoOutlook(r, emailsExtra='', sinAsistentes=false){
   const evento={
     subject:`Reserva - ${en}${r.motivo?' · '+r.motivo:''}`,
     body:{contentType:'HTML',content:`<p>Reserva confirmada para <strong>${r.nombre_reservante}</strong></p><table style="border-collapse:collapse;font-family:Segoe UI,sans-serif;font-size:13px;"><tr><td style="padding:8px 12px;background:#EEF2FA;font-weight:bold;color:#001F5B;width:120px">Espacio</td><td style="padding:8px 12px;">${en}</td></tr><tr><td style="padding:8px 12px;font-weight:bold;color:#001F5B;">Fecha</td><td style="padding:8px 12px;">${r.fecha}</td></tr><tr><td style="padding:8px 12px;background:#EEF2FA;font-weight:bold;color:#001F5B;">Horario</td><td style="padding:8px 12px;">${r.hora_inicio} – ${r.hora_fin}</td></tr></table>`},
-    start:{dateTime:`${r.fecha}T${r.hora_inicio}:00`,timeZone:'America/Bogota'},
-    end:{dateTime:`${r.fecha}T${r.hora_fin}:00`,timeZone:'America/Bogota'},
+    start:{dateTime:`${r.fecha}T${padHora(r.hora_inicio)}:00`,timeZone:'America/Bogota'},
+    end:{dateTime:`${r.fecha}T${padHora(r.hora_fin)}:00`,timeZone:'America/Bogota'},
     location:{displayName:`${en} - Caracol Televisión`},
     attendees:asistentes,
     isReminderOn:true,
