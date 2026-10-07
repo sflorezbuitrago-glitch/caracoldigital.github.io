@@ -626,7 +626,8 @@ function setUserUI(session){
 const SPACES = [
   {id:'sj5', label:'Sala de juntas Principal - Piso 5', icon:'🏢'},
   {id:'sjp', label:'Sala de juntas HUB - Piso P', icon:'🏛'},
-  {id:'cw5', label:'Sala de juntas Rincón del Vago - Piso 5', icon:'☕'}
+  {id:'cw5', label:'Sala de juntas Rincón del Vago - Piso 5', icon:'☕'},
+  {id:'trp', label:'Terraza piso P', icon:'🌿'}
 ];
 const HOURS = ['8:00','8:30','9:00','9:30','10:00','10:30','11:00','11:30',
                '12:00','12:30','13:00','13:30','14:00','14:30','15:00','15:30',
@@ -1501,7 +1502,7 @@ function resetContactos(){
   if(dd) dd.style.display='none';
 }
 
-const ESPACIOS_N={'sj5':'Sala de juntas Principal - Piso 5','sjp':'Sala de juntas HUB - Piso P','cw5':'Sala de juntas Rincón del Vago - Piso 5'};
+const ESPACIOS_N={'sj5':'Sala de juntas Principal - Piso 5','sjp':'Sala de juntas HUB - Piso P','cw5':'Sala de juntas Rincón del Vago - Piso 5','trp':'Terraza piso P'};
 
 // ── Generar UID determinístico basado en reserva (para reutilizar al cancelar) ──
 function generarUID(id){
