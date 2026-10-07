@@ -1089,80 +1089,7 @@ function editarReserva(b, sp, ds){
   showToast('Editando reserva — modifica los datos y confirma.','success');
 }
 
-// Sobreescribir doReserve para manejar edición
-const _doReserveOriginal = doReserve;
-async function doReserve(){
-  if(editandoReserva){
-    // Modo edición: PATCH en la misma reserva — sin borrar, sin duplicar
-    const btn=document.getElementById('btn-confirm'), btnText=document.getElementById('btn-text');
-    btn.disabled=true; btnText.innerHTML='<span class="spinner"></span> Actualizando…';
-    try{
-      const name=document.getElementById('f-name').value.trim();
-      const email=document.getElementById('f-email').value.trim();
-      const emailsExtra=document.getElementById('f-emails-extra').value.trim();
-      const motivo=document.getElementById('f-motivo').value.trim();
-
-      if(!isDemoMode){
-        // 0. Verificar disponibilidad excluyendo la reserva actual (para no bloquearse a sí misma)
-        const avail=await verificarDisponibilidadRPC(st.space,st.date,st.startH,st.endH,editandoReserva.id);
-        if(!avail.disponible){
-          const c=avail.conflicto;
-          throw new Error(c?`Horario ocupado por ${c.nombre} (${c.hora_inicio}–${c.hora_fin})`:avail.razon||'Horario no disponible');
-        }
-
-        // 1. Actualizar evento en Outlook (PATCH) — Exchange envía notificación de cambio a TODOS los asistentes
-        let outlookId=editandoReserva.outlookId;
-        try{
-          if(outlookId){
-            // Evento ya existe → actualizarlo (asistentes recibirán "Reunión actualizada")
-            await actualizarEventoOutlook(outlookId,{espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo,emailsExtra});
-          }else{
-            // No había evento de Outlook → crear uno nuevo con todos los asistentes
-            outlookId=await crearEventoOutlook({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo},emailsExtra,false)||'';
-          }
-        }catch(outErr){
-          if(outErr.message.includes('SESION_EXPIRADA')||outErr.message.includes('401')||outErr.message.includes('403')){
-            throw new Error('Sesión de Microsoft expirada. Recarga la página e inicia sesión de nuevo.');
-          }
-          console.warn('[Outlook] Error al actualizar evento:', outErr.message);
-          showToast('⚠ Evento de Outlook no actualizado. La reserva sí se actualizará.','error');
-        }
-
-        // 2. Actualizar el registro existente en Supabase (PATCH — mismo ID, sin duplicar)
-        await actualizarReserva(editandoReserva.id,{
-          espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,
-          nombre_reservante:name,email_reservante:email,emails_extra:emailsExtra,
-          motivo,outlook_event_id:outlookId
-        });
-        await cargarReservas();
-
-        // 3. Correo de confirmación de actualización a todos
-        const todos=[email,...(emailsExtra?emailsExtra.split(',').map(e=>e.trim()).filter(Boolean):[])];
-        for(const dest of todos){
-          await enviarCorreoGraph(dest,`✅ Reserva actualizada: ${ESPACIOS_N[st.space]||st.space} · ${st.date}`,
-            buildCorreoHTML({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:dest,motivo},false));
-        }
-      }
-      showToast('¡Reserva actualizada correctamente! Los participantes recibirán la notificación del cambio.','success');
-      editandoReserva=null;
-      document.getElementById('btn-text').textContent='Confirmar reserva';
-      st.startH=null; st.endH=null;
-      document.getElementById('f-name').value='';
-      document.getElementById('f-email').value='';
-      document.getElementById('f-emails-extra').value='';
-      document.getElementById('f-motivo').value='';
-      resetContactos();
-      document.getElementById('dur-badge').className='dur-badge';
-      document.getElementById('conflict-alert').style.display='none';
-      renderCal(); renderRangeSelector(); renderBookings(); updateSummary();
-      setUserUI(getSession());
-    }catch(e){ showToast('Error al actualizar: '+e.message,'error'); }
-    btnText.textContent='Confirmar reserva'; checkForm();
-    return;
-  }
-  // Modo normal
-  return _doReserveOriginal();
-}
+// (lógica de edición integrada directamente en doReserve — ver más abajo)
 
 
 // ── Recurrencia ──
@@ -1844,13 +1771,78 @@ function buildCorreoHTML(r, cancelled){
 
 
 async function doReserve(){
+  const btn=document.getElementById('btn-confirm'),btnText=document.getElementById('btn-text');
+  btn.disabled=true;
+
+  // ── MODO EDICIÓN: actualizar reserva existente (PATCH) — sin borrar, sin duplicar ──
+  if(editandoReserva){
+    btnText.innerHTML='<span class="spinner"></span> Actualizando…';
+    try{
+      const name=document.getElementById('f-name').value.trim();
+      const email=document.getElementById('f-email').value.trim();
+      const emailsExtra=document.getElementById('f-emails-extra').value.trim();
+      const motivo=document.getElementById('f-motivo').value.trim();
+
+      if(!isDemoMode){
+        // 0. Verificar disponibilidad excluyendo la reserva actual (sin bloquearse a sí misma)
+        const avail=await verificarDisponibilidadRPC(st.space,st.date,st.startH,st.endH,editandoReserva.id);
+        if(!avail.disponible){
+          const c=avail.conflicto;
+          throw new Error(c?`Horario ocupado por ${c.nombre} (${c.hora_inicio}–${c.hora_fin})`:avail.razon||'Horario no disponible');
+        }
+        // 1. Actualizar evento en Outlook (PATCH) → Exchange notifica cambio a todos los asistentes
+        let outlookId=editandoReserva.outlookId;
+        try{
+          if(outlookId){
+            await actualizarEventoOutlook(outlookId,{espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo,emailsExtra});
+          }else{
+            outlookId=await crearEventoOutlook({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:email,motivo},emailsExtra,false)||'';
+          }
+        }catch(outErr){
+          if(outErr.message.includes('SESION_EXPIRADA')||outErr.message.includes('401')||outErr.message.includes('403')){
+            throw new Error('Sesión de Microsoft expirada. Recarga la página e inicia sesión de nuevo.');
+          }
+          console.warn('[Outlook] Error al actualizar evento:', outErr.message);
+          showToast('⚠ Evento de Outlook no actualizado. La reserva sí se actualizará.','error');
+        }
+        // 2. PATCH en Supabase — mismo registro, mismo ID, sin crear uno nuevo
+        await actualizarReserva(editandoReserva.id,{
+          espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,
+          nombre_reservante:name,email_reservante:email,emails_extra:emailsExtra,
+          motivo,outlook_event_id:outlookId
+        });
+        await cargarReservas();
+        // 3. Correo de confirmación a todos los participantes
+        const todos=[email,...(emailsExtra?emailsExtra.split(',').map(e=>e.trim()).filter(Boolean):[])];
+        for(const dest of todos){
+          await enviarCorreoGraph(dest,`✅ Reserva actualizada: ${ESPACIOS_N[st.space]||st.space} · ${st.date}`,
+            buildCorreoHTML({espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,nombre_reservante:name,email_reservante:dest,motivo},false));
+        }
+      }
+      showToast('¡Reserva actualizada! Los participantes recibirán notificación del cambio en Outlook.','success');
+      editandoReserva=null;
+      document.getElementById('btn-text').textContent='Confirmar reserva';
+      st.startH=null; st.endH=null;
+      document.getElementById('f-name').value='';
+      document.getElementById('f-email').value='';
+      document.getElementById('f-emails-extra').value='';
+      document.getElementById('f-motivo').value='';
+      resetContactos();
+      document.getElementById('dur-badge').className='dur-badge';
+      document.getElementById('conflict-alert').style.display='none';
+      renderCal(); renderRangeSelector(); renderBookings(); updateSummary();
+      setUserUI(getSession());
+    }catch(e){ showToast('Error al actualizar: '+e.message,'error'); }
+    btnText.textContent='Confirmar reserva'; checkForm();
+    return; // ← salir: no ejecutar el flujo de creación
+  }
+
+  // ── MODO CREACIÓN: nueva reserva ──
   const name=document.getElementById('f-name').value.trim(),email=document.getElementById('f-email').value.trim();
   const emailsExtra=document.getElementById('f-emails-extra').value.trim();
   const motivo=document.getElementById('f-motivo').value.trim();
   const recurrencia=document.getElementById('f-recurrence').value;
   const recurrenciaFin=document.getElementById('f-recurrence-end').value;
-  const btn=document.getElementById('btn-confirm'),btnText=document.getElementById('btn-text');
-  btn.disabled=true;
 
   const fechas=(recurrencia!=='none'&&recurrenciaFin)?generarFechasRecurrentes(st.date,recurrencia,recurrenciaFin):[st.date];
   const esRecurrente=fechas.length>1;
