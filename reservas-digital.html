@@ -836,10 +836,10 @@ function setSyncing(syncing,ok){
   else if(ok===false){dot.className='sync-dot offline';lbl.textContent='Sin conexión';}
 }
 
-function getBookings(sp,ds){return st.bookings[sp+'|'+ds]||[];}
+function getBookings(sp,ds,excluirId=null){const all=st.bookings[sp+'|'+ds]||[];return excluirId?all.filter(b=>b.id!==excluirId):all;}
 function isBlocked(sp,ds,h){const m=hToMin(h);return getBookings(sp,ds).some(b=>m>=hToMin(b.start)&&m<hToMin(b.end));}
-function hasConflict(sp,ds,s,e){const sm=hToMin(s),em=hToMin(e);return getBookings(sp,ds).some(b=>sm<hToMin(b.end)&&em>hToMin(b.start));}
-function getConflicts(sp,ds,s,e){const sm=hToMin(s),em=hToMin(e);return getBookings(sp,ds).filter(b=>sm<hToMin(b.end)&&em>hToMin(b.start));}
+function hasConflict(sp,ds,s,e,excluirId=null){const sm=hToMin(s),em=hToMin(e);return getBookings(sp,ds,excluirId).some(b=>sm<hToMin(b.end)&&em>hToMin(b.start));}
+function getConflicts(sp,ds,s,e,excluirId=null){const sm=hToMin(s),em=hToMin(e);return getBookings(sp,ds,excluirId).filter(b=>sm<hToMin(b.end)&&em>hToMin(b.start));}
 
 function renderAll(){renderSpaces();renderCal();renderRangeSelector();renderBookings();updateSummary();}
 
@@ -889,7 +889,7 @@ function renderTimeGrid(){
   const grid=document.getElementById('time-grid');
   if(!st.date||!st.space){grid.innerHTML='';return;}
   const sm=st.startH?hToMin(st.startH):null, em=st.endH?hToMin(st.endH):null;
-  const bookings=getBookings(st.space,st.date);
+  const bookings=getBookings(st.space,st.date,editandoReserva?.id);
 
   grid.innerHTML=HOURS.slice(0,-1).map(h=>{
     const hm=hToMin(h);
@@ -916,7 +916,7 @@ function renderTimeGrid(){
 
 function timeClick(h){
   const hm=hToMin(h);
-  const bookings=getBookings(st.space,st.date);
+  const bookings=getBookings(st.space,st.date,editandoReserva?.id);
   const ocupado=bookings.some(b=>hm>=hToMin(b.start)&&hm<hToMin(b.end));
   const esFinExacto=bookings.some(b=>hm===hToMin(b.end));
   const esInicioExacto=bookings.some(b=>hm===hToMin(b.start));
@@ -936,7 +936,7 @@ function timeClick(h){
 function checkConflictAlert(){
   const alert=document.getElementById('conflict-alert');
   if(st.startH&&st.endH){
-    const c=getConflicts(st.space,st.date,st.startH,st.endH);
+    const c=getConflicts(st.space,st.date,st.startH,st.endH,editandoReserva?.id);
     if(c.length){alert.style.display='block';alert.textContent='Conflicto con: '+c.map(b=>b.name+' ('+b.start+'–'+b.end+')').join(', ');}
     else alert.style.display='none';
   }else alert.style.display='none';
@@ -944,7 +944,7 @@ function checkConflictAlert(){
 function renderDuration(){
   const badge=document.getElementById('dur-badge');
   if(st.startH&&st.endH&&hToMin(st.endH)>hToMin(st.startH)){
-    const conflict=hasConflict(st.space,st.date,st.startH,st.endH);
+    const conflict=hasConflict(st.space,st.date,st.startH,st.endH,editandoReserva?.id);
     badge.className='dur-badge '+(conflict?'conflict':'valid');
     badge.textContent=(conflict?'⚠ Conflicto · ':'✓ ')+durationLabel(st.startH,st.endH);
   }else{badge.className='dur-badge';}
@@ -1210,7 +1210,7 @@ function checkForm(){
   const name=document.getElementById('f-name').value.trim(),email=document.getElementById('f-email').value.trim();
   const motivo=document.getElementById('f-motivo').value.trim();
   const validEmail=/^[a-zA-Z0-9._%+\-]+@caracoltv\.com\.co$/.test(email);
-  const conflict=st.startH&&st.endH&&hasConflict(st.space,st.date,st.startH,st.endH);
+  const conflict=st.startH&&st.endH&&hasConflict(st.space,st.date,st.startH,st.endH,editandoReserva?.id);
   const validRange=st.startH&&st.endH&&hToMin(st.endH)>hToMin(st.startH);
   document.getElementById('btn-confirm').disabled=!(name&&validEmail&&st.date&&validRange&&!conflict&&motivo);
 }
