@@ -1822,6 +1822,11 @@ async function doReserve(){
       showToast('¡Reserva actualizada! Los participantes recibirán notificación del cambio en Outlook.','success');
       editandoReserva=null;
       document.getElementById('btn-text').textContent='Confirmar reserva';
+      // Navegar el calendario al nuevo mes/fecha de la reserva editada
+      // (st.date ya tiene la fecha nueva que el usuario seleccionó)
+      const fechaEditada=new Date(st.date+'T12:00:00');
+      st.year=fechaEditada.getFullYear();
+      st.month=fechaEditada.getMonth();
       st.startH=null; st.endH=null;
       document.getElementById('f-name').value='';
       document.getElementById('f-email').value='';
@@ -1830,7 +1835,8 @@ async function doReserve(){
       resetContactos();
       document.getElementById('dur-badge').className='dur-badge';
       document.getElementById('conflict-alert').style.display='none';
-      renderCal(); renderRangeSelector(); renderBookings(); updateSummary();
+      // Renderizar con datos frescos: muestra la reserva en su nueva fecha/hora/sala
+      renderSpaces(); renderCal(); renderRangeSelector(); renderBookings(); updateSummary();
       setUserUI(getSession());
     }catch(e){ showToast('Error al actualizar: '+e.message,'error'); }
     btnText.textContent='Confirmar reserva'; checkForm();
