@@ -733,23 +733,35 @@ async function cancelarReserva(id){
 
 // ── Actualizar reserva existente en Supabase (PATCH — sin borrar ni duplicar) ──
 async function actualizarReserva(id, datos){
+  // Supabase RLS no permite UPDATE (PATCH) con la anon key → usamos DELETE + INSERT,
+  // que sí están permitidos (igual que al cancelar y al crear una reserva nueva).
+  // 1. Borrar el registro antiguo
+  const delRes = await fetch(`${SUPABASE_URL}/rest/v1/reservas?id=eq.${id}`, {
+    method: 'DELETE',
+    headers: HEADERS
+  });
+  if(!delRes.ok){ const e=await delRes.json().catch(()=>({})); throw new Error(e.message||'Error al eliminar la reserva anterior'); }
+  // 2. Insertar el registro actualizado (conserva outlook_uid y serie_id para consistencia)
   const body = {
-    espacio:            datos.espacio,
-    fecha:              datos.fecha,
-    hora_inicio:        datos.hora_inicio,
-    hora_fin:           datos.hora_fin,
-    nombre_reservante:  datos.nombre_reservante,
-    email_reservante:   datos.email_reservante,
-    emails_extra:       datos.emails_extra||'',
-    motivo:             datos.motivo||'',
-    outlook_event_id:   datos.outlook_event_id||''
+    espacio:          datos.espacio,
+    fecha:            datos.fecha,
+    hora_inicio:      datos.hora_inicio,
+    hora_fin:         datos.hora_fin,
+    nombre_reservante:datos.nombre_reservante,
+    email_reservante: datos.email_reservante,
+    emails_extra:     datos.emails_extra||'',
+    motivo:           datos.motivo||'',
+    outlook_event_id: datos.outlook_event_id||''
   };
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/reservas?id=eq.${id}`, {
-    method: 'PATCH',
-    headers: { ...HEADERS, 'Prefer': 'return=minimal' },
+  if(datos.outlook_uid) body.outlook_uid = datos.outlook_uid;
+  if(datos.serie_id)    body.serie_id    = datos.serie_id;
+  const insRes = await fetch(`${SUPABASE_URL}/rest/v1/reservas`, {
+    method: 'POST',
+    headers: { ...HEADERS, 'Prefer': 'return=representation' },
     body: JSON.stringify(body)
   });
-  if(!res.ok){ const e=await res.json().catch(()=>({})); throw new Error(e.message||'Error actualizando reserva'); }
+  if(!insRes.ok){ const e=await insRes.json().catch(()=>({})); throw new Error(e.message||'Error al guardar la reserva actualizada'); }
+  return await insRes.json();
 }
 
 // ── Actualizar evento existente en Outlook (PATCH — Exchange notifica cambio a todos los asistentes) ──
@@ -1809,7 +1821,9 @@ async function doReserve(){
         await actualizarReserva(editandoReserva.id,{
           espacio:st.space,fecha:st.date,hora_inicio:st.startH,hora_fin:st.endH,
           nombre_reservante:name,email_reservante:email,emails_extra:emailsExtra,
-          motivo,outlook_event_id:outlookId
+          motivo,outlook_event_id:outlookId,
+          outlook_uid:editandoReserva.outlookUid||'',  // preservar UID para ICS
+          serie_id:editandoReserva.serieId||''          // preservar serie si aplica
         });
         await cargarReservas();
         // 3. Correo de confirmación a todos los participantes
