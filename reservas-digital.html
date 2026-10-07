@@ -228,10 +228,11 @@
   .dur-badge.conflict{ display: inline-flex; background: var(--caracol-red-lt); color: var(--caracol-red); }
 
   /* Visual time grid - replaces timeline */
-  .time-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; margin-top: 8px; }
+  .time-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; margin-top: 8px; }
   .time-btn { padding: 8px 4px; border-radius: 8px; border: 1.5px solid var(--gray-200); background: white; font-size: 12px; font-family: var(--font-head); font-weight: 600; cursor: pointer; text-align: center; transition: all 0.12s; color: var(--gray-600); }
   .time-btn:hover:not(.occup):not(.disabled) { border-color: var(--caracol-navy); color: var(--caracol-navy); background: var(--caracol-navy-lt); }
   .time-btn.occup { background: var(--gray-100); color: var(--gray-300); cursor: not-allowed; border-color: var(--gray-100); font-size: 10px; }
+  .time-btn.occup.occup-fin { cursor: pointer; opacity: 0.75; border-color: var(--gray-300); }
   .time-btn.sel-start { background: var(--caracol-navy); color: white; border-color: var(--caracol-navy); }
   .time-btn.sel-end   { background: var(--caracol-red); color: white; border-color: var(--caracol-red); }
   .time-btn.in-range  { background: var(--caracol-navy-lt); color: var(--caracol-navy); border-color: #c8d5ef; }
@@ -629,9 +630,9 @@ const SPACES = [
   {id:'cw5', label:'Sala de juntas Rincón del Vago - Piso 5', icon:'☕'},
   {id:'trp', label:'Terraza piso P', icon:'🌿'}
 ];
-const HOURS = ['8:00','8:30','9:00','9:30','10:00','10:30','11:00','11:30',
+const HOURS = ['7:00','7:30','8:00','8:30','9:00','9:30','10:00','10:30','11:00','11:30',
                '12:00','12:30','13:00','13:30','14:00','14:30','15:00','15:30',
-               '16:00','16:30','17:00','17:30','18:00'];
+               '16:00','16:30','17:00','17:30','18:00','18:30','19:00','19:30','20:00'];
 const MONTHS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 const DAYS = ['Do','Lu','Ma','Mi','Ju','Vi','Sa'];
 
@@ -897,19 +898,20 @@ function renderTimeGrid(){
     const ocupado = bookings.some(b=>hm>=hToMin(b.start)&&hm<hToMin(b.end));
     // Slot = fin exacto de una reserva → siempre libre (reserva consecutiva)
     const esFinExacto = bookings.some(b=>hm===hToMin(b.end));
-    // Slot = inicio exacto de otra reserva → libre SOLO como "fin" (después de elegir inicio)
-    // Esto permite reservar 10:30–11:00 cuando Juan tiene 11:00–11:30 ✅
-    const esInicioExacto = bookings.some(b=>hm===hToMin(b.start));
     const seleccionandoFin = sm!==null && em===null && hm>sm;
-    const disponible = !ocupado || esFinExacto || (esInicioExacto && seleccionandoFin);
+    // Visual: mostrar como ocupado si realmente lo está (independiente del modo)
+    const visOcupado = ocupado && !esFinExacto;
+    // Clickable: libre para inicio si no está ocupado; libre para fin SIEMPRE (el usuario elige su rango)
+    const clickable = !visOcupado || seleccionandoFin;
 
     let cls='time-btn';
     if(h===st.startH)       cls+=' sel-start';
     else if(h===st.endH)    cls+=' sel-end';
     else if(sm!==null&&em!==null&&hm>sm&&hm<em) cls+=' in-range';
-    else if(!disponible)    cls+=' occup';
+    else if(visOcupado && seleccionandoFin) cls+=' occup occup-fin'; // ocupado pero clickable como fin
+    else if(visOcupado)     cls+=' occup';
 
-    const onclick = disponible ? `onmousedown="timeClick('${h}')"` : '';
+    const onclick = clickable ? `onmousedown="timeClick('${h}')"` : '';
     return `<button class="${cls}" ${onclick} title="${h}">${h}</button>`;
   }).join('');
 }
@@ -919,10 +921,11 @@ function timeClick(h){
   const bookings=getBookings(st.space,st.date,editandoReserva?.id);
   const ocupado=bookings.some(b=>hm>=hToMin(b.start)&&hm<hToMin(b.end));
   const esFinExacto=bookings.some(b=>hm===hToMin(b.end));
-  const esInicioExacto=bookings.some(b=>hm===hToMin(b.start));
+  const visOcupado=ocupado&&!esFinExacto;
   const seleccionandoFin=st.startH!==null&&st.endH===null&&hm>hToMin(st.startH||'0:00');
-  const disponible=!ocupado||esFinExacto||(esInicioExacto&&seleccionandoFin);
-  if(!disponible) return;
+  // Permitir click si: (a) slot libre, o (b) seleccionando fin (sin límite de duración)
+  const clickable=!visOcupado||seleccionandoFin;
+  if(!clickable) return;
 
   if(!st.startH||(st.startH&&st.endH)){
     st.startH=h; st.endH=null;
